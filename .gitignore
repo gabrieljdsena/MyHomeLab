@@ -1,0 +1,51 @@
+# .NET build & publish
+**/bin/
+**/obj/
+artifacts/
+publish/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.tmp/
+
+# API static output (regenerated from frontend/dist on build)
+src/MyHomeLab.Api/wwwroot/
+
+# Secrets & certs - never commit
+certs/
+*.pfx
+*.password
+*.pem
+*.key
+*.crt
+*.csr
+.env
+.env.*
+!.env.example
+secrets/
+**/secrets.json
+**/appsettings.local.json
+**/appsettings.Production.json
+**/appsettings.Secrets.json
+
+# Logs
+logs/
+*.log
+*.out.log
+
+# IDE / OS
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.user
+*.suo
+*.ntvs*
+*.njsproj
+Thumbs.db
+.DS_Store
+
+# Misc generated
+*.tmp

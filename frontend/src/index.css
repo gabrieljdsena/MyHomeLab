@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0c0c0c;
+  --color-surface: #161616;
+  --color-surface-2: #202020;
+  --color-border: #2b2b2b;
+  --color-accent: #f97316;
+  --color-accent-hover: #fb923c;
+  --color-accent-soft: rgba(249, 115, 22, 0.15);
+  --color-text: #ededed;
+  --color-muted: #a1a1a1;
+  --color-up: #34d399;
+  --color-down: #fb7185;
+  --color-warn: #fbbf24;
+  --font-display: "Segoe UI", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(1200px 400px at 80% -5%, rgba(249, 115, 22, 0.09), transparent 60%),
+    radial-gradient(900px 300px at 10% 110%, rgba(251, 191, 36, 0.05), transparent 60%);
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 400,
+    "GRAD" 0,
+    "opsz" 24;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}

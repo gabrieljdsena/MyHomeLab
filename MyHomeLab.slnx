@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MyHomeLab.Api/MyHomeLab.Api.csproj" />
+    <Project Path="src/MyHomeLab.Application/MyHomeLab.Application.csproj" />
+    <Project Path="src/MyHomeLab.Domain/MyHomeLab.Domain.csproj" />
+    <Project Path="src/MyHomeLab.Infrastructure/MyHomeLab.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MyHomeLab.Tests/MyHomeLab.Tests.csproj" />
+  </Folder>
+</Solution>

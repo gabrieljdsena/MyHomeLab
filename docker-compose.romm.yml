@@ -1,0 +1,61 @@
+﻿services:
+  romm:
+    image: rommapp/romm:latest
+    container_name: romm
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    volumes:
+      - romm_resources:/romm/resources
+      - C:/Users/gabriel/Games:/romm/library
+      - C:/Users/gabriel/Games/assets:/romm/assets
+      - C:/Users/gabriel/Games/config:/romm/config
+      - D:/Games/Storage:/mnt/host/d/Games/Storage:ro
+    environment:
+      - DB_HOST=romm_db
+      - DB_PORT=3306
+      - DB_NAME=${ROMM_DB_NAME:-romm}
+      - DB_USER=${ROMM_DB_USER:-romm}
+      - DB_PASSWD=${ROMM_DB_PASSWORD:?set in .env}
+      - ROMM_AUTH_ENABLED=true
+      # Metadata providers — free sources enabled (no API key needed)
+      - HASHEOUS_API_ENABLED=true
+      - TGDB_API_ENABLED=true
+      - FLASHPOINT_API_ENABLED=true
+      - HLTB_API_ENABLED=true
+      - LAUNCHBOX_API_ENABLED=true
+      - PLAYMATCH_API_ENABLED=true
+      - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:?set in .env}
+      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:?set in .env}
+      # The following require free API keys — add yours when ready (see comments below)
+      # Get SteamGridDB key at https://www.steamgriddb.com/profile/preferences/api
+      # Get ScreenScraper account at https://www.screenscraper.fr/
+      # - STEAMGRIDDB_API_KEY=
+      # - MOBYGAMES_API_KEY=
+      # - SCREENSCRAPER_USER=
+      # - SCREENSCRAPER_PASSWORD=
+      # - RETROACHIEVEMENTS_API_KEY=
+    depends_on:
+      romm_db:
+        condition: service_healthy
+
+  romm_db:
+    image: mariadb:11.4
+    container_name: romm_db
+    restart: unless-stopped
+    volumes:
+      - romm_db_data:/var/lib/mysql
+    environment:
+      - MARIADB_ROOT_PASSWORD=${ROMM_DB_ROOT_PASSWORD:?set in .env}
+      - MARIADB_DATABASE=${ROMM_DB_NAME:-romm}
+      - MARIADB_USER=${ROMM_DB_USER:-romm}
+      - MARIADB_PASSWORD=${ROMM_DB_PASSWORD:?set in .env}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  romm_resources:
+  romm_db_data:

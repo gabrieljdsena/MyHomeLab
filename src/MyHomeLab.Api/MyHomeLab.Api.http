@@ -1,0 +1,11 @@
+@MyHomeLab.Api_HostAddress = http://192.168.15.22:8080
+
+GET {{MyHomeLab.Api_HostAddress}}/api/healthz
+
+###
+
+GET {{MyHomeLab.Api_HostAddress}}/api/apps
+
+###
+
+GET {{MyHomeLab.Api_HostAddress}}/api/categories

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MyHomeLab.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageReference Include="Microsoft.Management.Infrastructure" Version="3.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MyHomeLab.Application\MyHomeLab.Application.csproj" />
+    <ProjectReference Include="..\MyHomeLab.Infrastructure\MyHomeLab.Infrastructure.csproj" />
+    <ProjectReference Include="..\MyHomeLab.Domain\MyHomeLab.Domain.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyFrontendBuild" AfterTargets="Build" Condition="Exists('$(MSBuildThisFileDirectory)..\..\frontend\dist')">
+    <ItemGroup>
+      <_FrontendSource Include="$(MSBuildThisFileDirectory)..\..\frontend\dist\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_FrontendSource)" DestinationFiles="@(_FrontendSource->'$(MSBuildThisFileDirectory)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_FrontendSource)" DestinationFiles="@(_FrontendSource->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

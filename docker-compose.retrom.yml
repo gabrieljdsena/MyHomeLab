@@ -1,0 +1,20 @@
+services:
+  retrom:
+    image: ghcr.io/jmberesford/retrom:latest
+    container_name: retrom
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    volumes:
+      - retrom_data:/data
+      - D:/Games:/app/library
+    environment:
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  retrom_data:
