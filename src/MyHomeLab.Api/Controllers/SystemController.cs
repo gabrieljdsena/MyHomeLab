@@ -11,6 +11,7 @@ public sealed class SystemController(
     SystemMetricsService metrics,
     SystemSensorService sensors,
     StorageSmartService smart,
+    NetworkThroughputService network,
     IPowerService power) : ControllerBase
 {
     [HttpGet]
@@ -39,6 +40,13 @@ public sealed class SystemController(
             Temperatures = temps,
             StorageHealth = storageHealth,
         });
+    }
+
+    [HttpGet("network")]
+    [ProducesResponseType(typeof(IReadOnlyList<NetworkSampleDto>), StatusCodes.Status200OK)]
+    public IActionResult Network()
+    {
+        return Ok(network.GetSamples());
     }
 
     [HttpPost("power")]

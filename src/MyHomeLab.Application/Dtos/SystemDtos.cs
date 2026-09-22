@@ -20,6 +20,11 @@ public record StorageHealthReadingDto(
     long? DataWrittenBytes,
     long? PowerOnHours);
 
+public record NetworkSampleDto(
+    DateTime SampledAtUtc,
+    double DownloadBytesPerSec,
+    double UploadBytesPerSec);
+
 public record SystemMetricsDto(
     string HostName,
     string OperatingSystem,

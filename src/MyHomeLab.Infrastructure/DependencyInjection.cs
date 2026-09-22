@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MyHomeLab.Application.Abstractions;
+using MyHomeLab.Infrastructure.Docker;
 using MyHomeLab.Infrastructure.Health;
 using MyHomeLab.Infrastructure.Migrations;
 using MyHomeLab.Infrastructure.Persistence;
@@ -33,6 +34,7 @@ public static class DependencyInjection
 
         services.Configure<HealthOptions>(configuration.GetSection("Health"));
         services.Configure<TerminalOptions>(configuration.GetSection("Terminal"));
+        services.Configure<DockerOptions>(configuration.GetSection("Docker"));
         services.AddHttpClient("health")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -42,9 +44,11 @@ public static class DependencyInjection
         services.AddSingleton(dataSource);
         services.AddSingleton<IMigrationRunner, SqlMigrationRunner>();
         services.AddSingleton<IAppRepository, DapperAppRepository>();
+        services.AddSingleton<IHealthHistoryRepository, DapperHealthHistoryRepository>();
         services.AddSingleton<IHealthChecker, HttpHealthChecker>();
         services.AddSingleton<ITerminalService, TerminalService>();
         services.AddSingleton<IPowerService, PowerService>();
+        services.AddSingleton<IDockerService, DockerService>();
 
         return services;
     }

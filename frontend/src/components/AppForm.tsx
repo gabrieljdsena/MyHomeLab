@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useCategories, useCreateApp, useUpdateApp } from '../features/apps/useApps'
+import { useDockerContainers } from '../features/docker/useDocker'
 import type { AppDetail, CreateAppInput } from '../lib/types'
 import { HttpError } from '../api/client'
 import { Icon } from './Icon'
@@ -53,6 +54,7 @@ function toForm(app: AppDetail | null): CreateAppInput {
     category: app?.category ?? 'other',
     port: app?.port ?? null,
     tags: app?.tags ?? [],
+    dockerContainer: app?.dockerContainer ?? null,
     healthCheckEnabled: app?.healthCheckEnabled ?? true,
     healthCheckIntervalMs: app?.healthCheckIntervalMs ?? 30_000,
     sortOrder: app?.sortOrder ?? 0,
@@ -69,6 +71,7 @@ export function AppForm({
   const categories = useCategories()
   const createMutation = useCreateApp()
   const updateMutation = useUpdateApp()
+  const docker = useDockerContainers()
 
   const [form, setForm] = useState<CreateAppInput>(() => toForm(app))
   const [tagsText, setTagsText] = useState(() => (app ? app.tags.join(', ') : ''))
@@ -247,6 +250,27 @@ export function AppForm({
               onChange={(e) => setTagsText(e.target.value)}
               placeholder="media, video"
             />
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">
+              Docker container
+            </span>
+            <input
+              className={inputClass}
+              value={form.dockerContainer ?? ''}
+              onChange={(e) => set('dockerContainer', e.target.value === '' ? null : e.target.value)}
+              list="docker-options"
+              placeholder="pihole (optional — enables start/stop)"
+            />
+            <datalist id="docker-options">
+              {(docker.data ?? []).map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.state} · {c.image}
+                </option>
+              ))}
+            </datalist>
+            <p className="mt-1 text-[11px] text-muted/60">Leave empty for native/remote apps. When set, tile shows start/stop/restart.</p>
           </label>
 
           <label className="block">

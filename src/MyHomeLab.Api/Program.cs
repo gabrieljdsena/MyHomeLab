@@ -40,6 +40,7 @@ builder.Services.AddScoped<AppService>();
 builder.Services.AddSingleton<SystemMetricsService>();
 builder.Services.AddSingleton<SystemSensorService>();
 builder.Services.AddSingleton<StorageSmartService>();
+builder.Services.AddSingleton<NetworkThroughputService>();
 builder.Services.AddHostedService<HealthCheckBackgroundService>();
 
 var devOrigins = builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty;

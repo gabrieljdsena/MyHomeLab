@@ -18,6 +18,9 @@
       - DB_USER=${ROMM_DB_USER:-romm}
       - DB_PASSWD=${ROMM_DB_PASSWORD:?set in .env}
       - ROMM_AUTH_ENABLED=true
+      - REDIS_HOST=valkey
+      - REDIS_PORT=6379
+      - STREAMING_BROKER_SECRET=${STREAMING_BROKER_SECRET:?set in .env}
       # Metadata providers — free sources enabled (no API key needed)
       - HASHEOUS_API_ENABLED=true
       - TGDB_API_ENABLED=true
@@ -56,6 +59,94 @@
       timeout: 5s
       retries: 5
 
+  valkey:
+    image: valkey/valkey:8
+    container_name: romm_valkey
+    restart: unless-stopped
+    volumes:
+      - romm_valkey_data:/data
+    command: valkey-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pcsx2:
+    image: lscr.io/linuxserver/pcsx2:latest
+    container_name: pcsx2
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Sao_Paulo
+      - DOCKER_MODS=ghcr.io/loneangelfayt/pcsx2-romm-integration-mod:latest
+      - BROKER_SECRET=${STREAMING_BROKER_SECRET:?set in .env}
+      - ROM_ROOT=/romm/library
+      - STREAM_GATE=off
+    volumes:
+      - pcsx2_config:/config
+      - C:/Users/gabriel/Games:/romm/library:ro
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "8000:8000"
+    shm_size: "1gb"
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+  webstation:
+    image: lscr.io/linuxserver/webstation:romm
+    container_name: webstation
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Sao_Paulo
+      - SUBFOLDER=/streaming/
+      - BROKER_SECRET=${STREAMING_BROKER_SECRET:?set in .env}
+      - TITLE=RomM PSP Streaming
+      - PPSSPP_BIN=/config/ppsspp-wrapper.sh
+    volumes:
+      - webstation_config:/config
+      - C:/Users/gabriel/Games:/romm:ro
+    ports:
+      - "3002:3000"
+      - "3003:3001"
+    shm_size: "1gb"
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+  ppsspp_proxy:
+    image: python:3.11-alpine
+    container_name: ppsspp_proxy
+    restart: unless-stopped
+    volumes:
+      - C:/Users/gabriel/romm_proxy/ppsspp_shim.py:/app.py:ro
+    command: sh -c "pip install fastapi uvicorn httpx && python /app.py"
+    ports:
+      - "8001:8000"
+    depends_on:
+      - webstation
+
+  nginx:
+    image: nginx:alpine
+    container_name: romm_nginx
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - C:/Users/gabriel/romm_proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - C:/Users/gabriel/romm_proxy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - romm
+      - pcsx2
+
 volumes:
   romm_resources:
   romm_db_data:
+  romm_valkey_data:
+  pcsx2_config:
+  webstation_config:

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useApps, useDeleteApp, usePatchApp, useProbeApp } from '../features/apps/useApps'
+import { useAppDockerAction, useDockerContainers } from '../features/docker/useDocker'
 import type { AppDetail } from '../lib/types'
 import { AppForm } from '../components/AppForm'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -12,11 +13,15 @@ export function Manage() {
   const deleteMutation = useDeleteApp()
   const patchMutation = usePatchApp()
   const probeMutation = useProbeApp()
+  const dockerContainers = useDockerContainers()
+  const dockerAction = useAppDockerAction()
+  const containerByName = new Map((dockerContainers.data ?? []).map((c) => [c.name, c]))
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<AppDetail | null>(null)
   const [deleting, setDeleting] = useState<AppDetail | null>(null)
   const [probingId, setProbingId] = useState<string | null>(null)
+  const [dockerBusyId, setDockerBusyId] = useState<string | null>(null)
 
   const openCreate = () => {
     setEditing(null)
@@ -37,6 +42,15 @@ export function Manage() {
       await probeMutation.mutateAsync(app.id)
     } finally {
       setProbingId(null)
+    }
+  }
+
+  const runDocker = async (app: AppDetail, action: 'start' | 'stop' | 'restart') => {
+    setDockerBusyId(`${app.id}:${action}`)
+    try {
+      await dockerAction.mutateAsync({ appId: app.id, action })
+    } finally {
+      setDockerBusyId(null)
     }
   }
 
@@ -94,6 +108,7 @@ export function Manage() {
               <th className="px-4 py-3 font-medium">App</th>
               <th className="px-4 py-3 font-medium">Category</th>
               <th className="px-4 py-3 font-medium">Port</th>
+              <th className="px-4 py-3 font-medium">Container</th>
               <th className="px-4 py-3 font-medium">Health</th>
               <th className="px-4 py-3 font-medium">Checked</th>
               <th className="px-4 py-3 font-medium">Visible</th>
@@ -120,6 +135,26 @@ export function Manage() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-muted">{app.port ?? '—'}</td>
+                <td className="px-4 py-3">
+                  {app.dockerContainer ? (
+                    (() => {
+                      const c = containerByName.get(app.dockerContainer)
+                      if (!c) return <span className="inline-flex items-center gap-1 rounded-full bg-down/15 px-2 py-0.5 text-xs font-medium text-down">{app.dockerContainer} · not found</span>
+                      const isRunning = c.state === 'running'
+                      return (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${isRunning ? 'bg-up/15 text-up' : 'bg-surface-2 text-muted'}`}
+                          title={c.status}
+                        >
+                          <span className={`size-1.5 rounded-full ${isRunning ? 'bg-up' : 'bg-muted'}`} />
+                          {c.name} · {c.state}
+                        </span>
+                      )
+                    })()
+                  ) : (
+                    <span className="text-xs text-muted/50">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <StatusLabel status={app.healthStatus} />
@@ -148,6 +183,50 @@ export function Manage() {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1">
+                    {app.dockerContainer && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => runDocker(app, 'start')}
+                          disabled={dockerBusyId?.startsWith(app.id) || containerByName.get(app.dockerContainer)?.state === 'running'}
+                          className="cursor-pointer rounded-lg p-2 text-muted transition hover:bg-surface-2 hover:text-up disabled:opacity-40"
+                          title="Start container"
+                        >
+                          {dockerBusyId === `${app.id}:start` ? (
+                            <span className="block size-4 animate-spin rounded-full border-2 border-muted/40 border-t-up" />
+                          ) : (
+                            <Icon name="play_arrow" className="text-[18px]" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runDocker(app, 'stop')}
+                          disabled={dockerBusyId?.startsWith(app.id) || containerByName.get(app.dockerContainer)?.state !== 'running'}
+                          className="cursor-pointer rounded-lg p-2 text-muted transition hover:bg-surface-2 hover:text-down disabled:opacity-40"
+                          title="Stop container"
+                        >
+                          {dockerBusyId === `${app.id}:stop` ? (
+                            <span className="block size-4 animate-spin rounded-full border-2 border-muted/40 border-t-down" />
+                          ) : (
+                            <Icon name="stop" className="text-[18px]" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runDocker(app, 'restart')}
+                          disabled={dockerBusyId?.startsWith(app.id)}
+                          className="cursor-pointer rounded-lg p-2 text-muted transition hover:bg-surface-2 hover:text-accent disabled:opacity-40"
+                          title="Restart container"
+                        >
+                          {dockerBusyId === `${app.id}:restart` ? (
+                            <span className="block size-4 animate-spin rounded-full border-2 border-muted/40 border-t-accent" />
+                          ) : (
+                            <Icon name="restart_alt" className="text-[18px]" />
+                          )}
+                        </button>
+                        <span className="mx-1 h-4 w-px bg-border" />
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={() => probe(app)}

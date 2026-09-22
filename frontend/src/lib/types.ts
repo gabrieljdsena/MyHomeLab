@@ -9,6 +9,7 @@ export interface AppDetail {
   category: string
   port: number | null
   tags: string[]
+  dockerContainer: string | null
   healthCheckEnabled: boolean
   healthCheckIntervalMs: number
   healthStatus: HealthStatus
@@ -28,6 +29,7 @@ export interface CreateAppInput {
   category: string
   port: number | null
   tags: string[]
+  dockerContainer: string | null
   healthCheckEnabled: boolean
   healthCheckIntervalMs: number
   sortOrder: number
@@ -43,10 +45,30 @@ export interface PatchAppInput {
   category?: string
   port?: number
   tags?: string[]
+  dockerContainer?: string | null
   healthCheckEnabled?: boolean
   isEnabled?: boolean
   healthCheckIntervalMs?: number
   sortOrder?: number
+}
+
+export interface DockerContainer {
+  id: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string | null
+  createdAt: string
+}
+
+export interface DockerActionResult {
+  container: string
+  action: string
+  success: boolean
+  status: string | null
+  state: string | null
+  message: string | null
 }
 
 export interface HealthResult {
@@ -99,4 +121,31 @@ export interface SystemMetrics {
   disks: DiskMetric[]
   temperatures: TemperatureReading[]
   storageHealth: StorageHealthReading[]
+}
+
+export interface NetworkSample {
+  sampledAtUtc: string
+  downloadBytesPerSec: number
+  uploadBytesPerSec: number
+}
+
+export interface AppHealthPoint {
+  status: HealthStatus
+  latencyMs: number | null
+  checkedAtUtc: string
+}
+
+export interface HealthUptime {
+  uptimePercent: number
+  totalChecks: number
+  upCount: number
+  downCount: number
+  averageLatencyMs: number | null
+  minLatencyMs: number | null
+  maxLatencyMs: number | null
+}
+
+export interface HealthHistory {
+  points: AppHealthPoint[]
+  uptime: HealthUptime
 }

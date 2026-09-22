@@ -8,7 +8,8 @@ public record AppBaseDto(
     string Icon,
     string Category,
     int? Port,
-    string[] Tags);
+    string[] Tags,
+    string? DockerContainer);
 
 public record AppSummaryDto(
     Guid Id,
@@ -19,10 +20,11 @@ public record AppSummaryDto(
     string Category,
     int? Port,
     string[] Tags,
+    string? DockerContainer,
     string HealthStatus,
     int? LastLatencyMs,
     bool IsEnabled,
-    int SortOrder) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags);
+    int SortOrder) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer);
 
 public record AppDetailDto(
     Guid Id,
@@ -33,6 +35,7 @@ public record AppDetailDto(
     string Category,
     int? Port,
     string[] Tags,
+    string? DockerContainer,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     string HealthStatus,
@@ -41,7 +44,7 @@ public record AppDetailDto(
     bool IsEnabled,
     int SortOrder,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags);
+    DateTime UpdatedAtUtc) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer);
 
 public record CreateAppRequest(
     string Name,
@@ -51,6 +54,7 @@ public record CreateAppRequest(
     string Category,
     int? Port,
     string[] Tags,
+    string? DockerContainer,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     int SortOrder);
@@ -63,6 +67,7 @@ public record UpdateAppRequest(
     string Category,
     int? Port,
     string[] Tags,
+    string? DockerContainer,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     int SortOrder);
@@ -75,6 +80,7 @@ public record PatchAppRequest(
     string? Category,
     int? Port,
     string[]? Tags,
+    string? DockerContainer,
     bool? HealthCheckEnabled,
     bool? IsEnabled,
     int? HealthCheckIntervalMs,

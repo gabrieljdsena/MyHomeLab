@@ -7,7 +7,9 @@ using MyHomeLab.Domain.Entities;
 
 namespace MyHomeLab.Application.Services;
 
-public sealed class AppService(IAppRepository repository)
+public sealed class AppService(
+    IAppRepository repository,
+    IHealthHistoryRepository? historyRepository = null)
 {
     public async Task<IReadOnlyList<AppDetailDto>> GetAllAsync(AppQuery query, CancellationToken cancellationToken = default)
     {
@@ -43,6 +45,7 @@ public sealed class AppService(IAppRepository repository)
             request.Category,
             request.Port,
             request.Tags,
+            request.DockerContainer,
             request.HealthCheckEnabled,
             request.HealthCheckIntervalMs,
             request.SortOrder);
@@ -66,6 +69,7 @@ public sealed class AppService(IAppRepository repository)
             request.Category,
             request.Port,
             request.Tags,
+            request.DockerContainer,
             request.HealthCheckEnabled,
             request.HealthCheckIntervalMs,
             request.SortOrder);
@@ -93,6 +97,7 @@ public sealed class AppService(IAppRepository repository)
             request.Category ?? app.Category,
             request.Port ?? app.Port,
             request.Tags ?? app.Tags,
+            request.DockerContainer ?? app.DockerContainer,
             request.HealthCheckEnabled ?? app.HealthCheckEnabled,
             request.HealthCheckIntervalMs ?? app.HealthCheckIntervalMs,
             request.SortOrder ?? app.SortOrder);
@@ -136,10 +141,45 @@ public sealed class AppService(IAppRepository repository)
             ?? throw new AppNotFoundException($"App '{id}' was not found.");
 
         var outcome = await checker.ProbeAsync(app.Url, cancellationToken);
-        app.SetHealth(outcome.Status, outcome.LatencyMs, DateTime.UtcNow);
+        var checkedAt = DateTime.UtcNow;
+        app.SetHealth(outcome.Status, outcome.LatencyMs, checkedAt);
         await repository.UpdateHealthAsync(app, cancellationToken);
 
+        if (historyRepository is not null)
+        {
+            try
+            {
+                var sample = AppHealthSample.Create(app.Id, outcome.Status, outcome.LatencyMs, checkedAt);
+                await historyRepository.AddAsync(sample, cancellationToken);
+            }
+            catch
+            {
+                // History is best-effort; health status already persisted.
+            }
+        }
+
         return new HealthResultDto(outcome.Status.ToString().ToLowerInvariant(), outcome.LatencyMs);
+    }
+
+    public async Task<HealthHistoryDto> GetHealthHistoryAsync(AppId id, int hours, int limit, CancellationToken cancellationToken = default)
+    {
+        var app = await repository.GetByIdAsync(id, cancellationToken)
+            ?? throw new AppNotFoundException($"App '{id}' was not found.");
+
+        if (historyRepository is null)
+        {
+            return new HealthHistoryDto([], new HealthUptimeDto(0, 0, 0, 0, null, null, null));
+        }
+
+        hours = hours < 1 ? 1 : hours > 720 ? 720 : hours;
+        limit = limit < 1 ? 1 : limit > 1000 ? 1000 : limit;
+
+        var sinceUtc = DateTime.UtcNow.AddHours(-hours);
+        var samples = await historyRepository.GetRecentAsync(
+            new HealthHistoryQuery(app.Id, sinceUtc, limit),
+            cancellationToken);
+
+        return samples.ToHistoryDto();
     }
 
     private async Task EnsureUniqueNameAsync(string name, AppId? excludeId, CancellationToken cancellationToken)

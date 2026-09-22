@@ -30,6 +30,14 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`
 }
 
+export function formatBytesPerSec(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '0 B/s'
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytesPerSec) / Math.log(1024)))
+  const value = bytesPerSec / 1024 ** i
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`
+}
+
 export function formatUptime(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds))
   const days = Math.floor(seconds / 86400)

@@ -8,7 +8,7 @@ namespace MyHomeLab.Api.Controllers;
 
 [ApiController]
 [Route("api/apps")]
-public sealed class AppsController(AppService appService, IHealthChecker healthChecker) : ControllerBase
+public sealed class AppsController(AppService appService, IHealthChecker healthChecker, IDockerService dockerService) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType(typeof(AppDetailDto[]), StatusCodes.Status200OK)]
@@ -80,6 +80,55 @@ public sealed class AppsController(AppService appService, IHealthChecker healthC
     public async Task<IActionResult> CheckApp(Guid id, CancellationToken cancellationToken)
     {
         var result = await appService.ProbeAsync(AppId.From(id), healthChecker, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("{id:guid}/history")]
+    [ProducesResponseType(typeof(HealthHistoryDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetHistory(
+        Guid id,
+        [FromQuery] int hours = 24,
+        [FromQuery] int limit = 200,
+        CancellationToken cancellationToken = default)
+    {
+        var history = await appService.GetHealthHistoryAsync(AppId.From(id), hours, limit, cancellationToken);
+        return Ok(history);
+    }
+
+    [HttpGet("{id:guid}/docker")]
+    [ProducesResponseType(typeof(DockerContainerDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAppContainer(Guid id, CancellationToken cancellationToken)
+    {
+        var app = await appService.GetByIdAsync(AppId.From(id), cancellationToken);
+        if (string.IsNullOrWhiteSpace(app.DockerContainer))
+        {
+            return NotFound(new ProblemDetails { Title = "Not Found", Detail = "App has no docker container assigned.", Status = StatusCodes.Status404NotFound });
+        }
+
+        var container = await dockerService.InspectAsync(app.DockerContainer, cancellationToken);
+        if (container is null)
+        {
+            return NotFound(new ProblemDetails { Title = "Not Found", Detail = $"Container '{app.DockerContainer}' was not found.", Status = StatusCodes.Status404NotFound });
+        }
+
+        return Ok(container);
+    }
+
+    [HttpPost("{id:guid}/docker/{dockerAction}")]
+    [ProducesResponseType(typeof(DockerActionResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ExecuteAppContainerAction(Guid id, string dockerAction, CancellationToken cancellationToken)
+    {
+        var app = await appService.GetByIdAsync(AppId.From(id), cancellationToken);
+        if (string.IsNullOrWhiteSpace(app.DockerContainer))
+        {
+            return NotFound(new ProblemDetails { Title = "Not Found", Detail = "App has no docker container assigned.", Status = StatusCodes.Status404NotFound });
+        }
+
+        var result = await dockerService.ExecuteAsync(app.DockerContainer, dockerAction, cancellationToken);
         return Ok(result);
     }
 }

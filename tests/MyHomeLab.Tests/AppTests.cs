@@ -15,6 +15,7 @@ public class AppTests
             "media",
             8096,
             ["media", "video"],
+            dockerContainer: null,
             healthCheckEnabled: true,
             healthCheckIntervalMs: 30_000,
             sortOrder: 10);
@@ -34,7 +35,7 @@ public class AppTests
     public void Create_Rejects_Empty_Name()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("", "http://localhost:8096", "", "web", "media", null, null, true, 30_000, 0));
+            App.Create("", "http://localhost:8096", "", "web", "media", null, null, null, true, 30_000, 0));
 
         Assert.Equal("Name is required.", ex.Message);
     }
@@ -43,7 +44,7 @@ public class AppTests
     public void Create_Rejects_Relative_Url()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("X", "/not-absolute", "", "web", "other", null, null, true, 30_000, 0));
+            App.Create("X", "/not-absolute", "", "web", "other", null, null, null, true, 30_000, 0));
 
         Assert.Equal("URL must be an absolute http(s) address.", ex.Message);
     }
@@ -52,7 +53,7 @@ public class AppTests
     public void Create_Rejects_NonHttpScheme()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("X", "ftp://localhost", "", "web", "other", null, null, true, 30_000, 0));
+            App.Create("X", "ftp://localhost", "", "web", "other", null, null, null, true, 30_000, 0));
 
         Assert.Equal("URL must be an absolute http(s) address.", ex.Message);
     }
@@ -61,7 +62,7 @@ public class AppTests
     public void Create_Rejects_OutOfRange_Port()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("X", "http://localhost", "", "web", "other", 70000, null, true, 30_000, 0));
+            App.Create("X", "http://localhost", "", "web", "other", 70000, null, null, true, 30_000, 0));
 
         Assert.Equal("Port must be between 1 and 65535.", ex.Message);
     }
@@ -70,7 +71,7 @@ public class AppTests
     public void Create_Rejects_OutOfRange_HealthInterval()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("X", "http://localhost", "", "web", "other", null, null, true, 500, 0));
+            App.Create("X", "http://localhost", "", "web", "other", null, null, null, true, 500, 0));
 
         Assert.Equal("Health check interval must be between 1000 and 3600000 ms.", ex.Message);
     }
@@ -79,7 +80,7 @@ public class AppTests
     public void Create_Rejects_Negative_SortOrder()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            App.Create("X", "http://localhost", "", "web", "other", null, null, true, 30_000, -1));
+            App.Create("X", "http://localhost", "", "web", "other", null, null, null, true, 30_000, -1));
 
         Assert.Equal("Sort order cannot be negative.", ex.Message);
     }
@@ -115,7 +116,7 @@ public class AppTests
         var app = CreateApp();
         var before = app.UpdatedAtUtc;
 
-        app.UpdateDetails("New Name", "http://localhost:1234", "New desc", "memory", "ai", 1234, ["llm"], false, 60_000, 5);
+        app.UpdateDetails("New Name", "http://localhost:1234", "New desc", "memory", "ai", 1234, ["llm"], null, false, 60_000, 5);
 
         Assert.Equal("New Name", app.Name);
         Assert.Equal("http://localhost:1234", app.Url);
@@ -146,6 +147,7 @@ public class AppTests
             "media",
             8096,
             ["media"],
+            null,
             true,
             30_000,
             AppHealthStatus.Up,
@@ -159,5 +161,37 @@ public class AppTests
         Assert.Equal(AppHealthStatus.Up, app.HealthStatus);
         Assert.Equal(12, app.LastLatencyMs);
         Assert.Equal(3, app.SortOrder);
+    }
+
+    [Fact]
+    public void Create_Normalizes_DockerContainer()
+    {
+        var app = App.Create("X", "http://localhost", "desc", "web", "other", null, null, "  pihole  ", true, 30_000, 0);
+        Assert.Equal("pihole", app.DockerContainer);
+
+        var empty = App.Create("Y", "http://localhost:8081", "desc", "web", "other", null, null, "   ", true, 30_000, 0);
+        Assert.Null(empty.DockerContainer);
+
+        var nullContainer = App.Create("Z", "http://localhost:8082", "desc", "web", "other", null, null, null, true, 30_000, 0);
+        Assert.Null(nullContainer.DockerContainer);
+    }
+
+    [Fact]
+    public void Create_Rejects_Invalid_DockerContainer()
+    {
+        var ex = Assert.Throws<DomainException>(() =>
+            App.Create("X", "http://localhost", "desc", "web", "other", null, null, "bad name!", true, 30_000, 0));
+        Assert.Contains("Docker container", ex.Message);
+    }
+
+    [Fact]
+    public void UpdateDetails_Sets_And_Clears_DockerContainer()
+    {
+        var app = CreateApp();
+        app.UpdateDetails("X", "http://localhost:1234", "desc", "web", "other", null, null, "my-container_1", true, 30_000, 0);
+        Assert.Equal("my-container_1", app.DockerContainer);
+
+        app.UpdateDetails("X", "http://localhost:1234", "desc", "web", "other", null, null, "  ", true, 30_000, 0);
+        Assert.Null(app.DockerContainer);
     }
 }

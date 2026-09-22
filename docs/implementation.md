@@ -88,17 +88,17 @@ plugs in behind interfaces.
 
 - **Domain** (`MyHomeLab.Domain`) — pure C#. `App` aggregate:
   - identity `AppId` (UUID) as a Value Object
-  - properties: `Name`, `Description`, `Url`, `Icon`, `Category`, `Port`, `Tags`,
-    `HealthCheckEnabled`, `HealthCheckIntervalMs`, `IsEnabled`, `SortOrder`
+  - properties: `Name`, `Description`, `Url`, `Icon`, `Category`, `Port`, `Tags`, `DockerContainer`, `HealthCheckEnabled`, `HealthCheckIntervalMs`, `IsEnabled`, `SortOrder`
   - behavior (not anemic): `Enable()`, `Disable()`, `SetHealth(status, latencyMs)`,
-    `UpdateDetails(...)` guard invariants (non-empty name, valid absolute URL)
+    `UpdateDetails(...)` guard invariants (non-empty name, valid absolute URL, docker name `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`)
   - value objects: `AppId`, `AppHealthStatus` (`Unknown | Up | Down`), `Category`
-- **Application** — orchestration + DTOs. `IAppRepository` (the only port),
-  `AppService` implementing CRUD, and an `IHealthChecker` abstraction.
-  No Postgres/Dapper references here.
-- **Infrastructure** — `DapperAppRepository` (raw SQL via Npgsql/Dapper),
+  - history entity: `AppHealthSample` (`AppId`, `Status`, `LatencyMs`, `CheckedAtUtc`) — one row per probe
+- **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` ports,
+  `AppService` implementing CRUD (+ `DockerContainer`) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
+  and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
+- **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` (raw SQL via Npgsql/Dapper),
   `SqlMigrationRunner` (executes `Migrations/*.sql` in order, tracked in
-  `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe).
+  `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe), `DockerService` (wraps `docker` CLI via `Process` — `ps -a --format "{{json .}}"`, `start/stop/restart`).
 - **Api** — controllers (`AppsController`) return typed DTOs, map `404`/`400`/`409`,
   wire DI, serve `wwwroot`, top-level exception middleware returning RFC 7807 problems.
 
@@ -130,6 +130,21 @@ CREATE TABLE apps (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Health history (one row per probe, 0005_create_health_history.sql)
+CREATE TABLE app_health_checks (
+    id         BIGSERIAL PRIMARY KEY,
+    app_id     UUID NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL CHECK (status IN ('unknown','up','down')),
+    latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_app_health_checks_app_time ON app_health_checks (app_id, checked_at DESC);
+CREATE INDEX ix_app_health_checks_checked_at ON app_health_checks (checked_at DESC);
+
+-- Docker mapping (0006_add_docker_container.sql)
+ALTER TABLE apps ADD COLUMN docker_container TEXT;
+CREATE INDEX ix_apps_docker_container ON apps (docker_container) WHERE docker_container IS NOT NULL;
 ```
 
 Migrations live in `src/MyHomeLab.Infrastructure/Migrations/` as `NNNN_description.sql`
@@ -147,7 +162,14 @@ PUT    /api/apps/{id}           -> 200 AppDetail  (full update)
 PATCH  /api/apps/{id}           -> 200 AppDetail  (partial: status toggle, sort order)
 DELETE /api/apps/{id}           -> 204
 POST   /api/apps/{id}/check     -> 200 {status, latencyMs}   (manual probe now)
+GET    /api/apps/{id}/history?hours=24&limit=200 -> HealthHistory {points, uptime}
+GET    /api/apps/{id}/docker    -> DockerContainer (200) or 404 if no mapping / not found
+POST   /api/apps/{id}/docker/{start|stop|restart} -> DockerActionResult
+GET    /api/docker/containers   -> DockerContainer[]
+GET    /api/docker/containers/{name} -> DockerContainer
+POST   /api/docker/containers/{name}/{start|stop|restart} -> DockerActionResult
 GET    /api/system              -> SystemMetrics   (live CPU/RAM/disks of this host)
+GET    /api/system/network      -> NetworkSample[] (rolling ~5 min throughput history)
 POST   /api/system/power        -> PowerResponse   (shutdown/reboot host, uses shutdown /s|/r /t 0 or shutdown -h|-r now)
 GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
@@ -160,13 +182,14 @@ GET    /swagger                 -> Swagger UI
 ```json
 {
   "id": "uuid",
-  "name": "Jellyfin",
-  "description": "Media server",
-  "url": "http://192.168.15.22:8096",
-  "icon": "movie",
-  "category": "media",
-  "port": 8096,
-  "tags": ["media", "video"],
+  "name": "SearXNG",
+  "description": "Meta search engine",
+  "url": "http://192.168.15.22:8888",
+  "icon": "travel_explore",
+  "category": "tools",
+  "port": 8888,
+  "tags": ["search"],
+  "dockerContainer": "searxng",
   "healthCheckEnabled": true,
   "healthCheckIntervalMs": 30000,
   "healthStatus": "up",
@@ -178,6 +201,49 @@ GET    /swagger                 -> Swagger UI
   "updatedAtUtc": "..."
 }
 ```
+`dockerContainer` is `null` for native/remote apps; when set it enables Dashboard/Manage start/stop/restart. Suggested values for this lab: `pihole` (Pi-hole on :80), `open-webui` (:3000), `searxng` (:8888), `romm`/`romm_db`/`valkey` (:8082 via compose), `retrom` (:8083), `pcsx2`/`webstation` (RomM streaming).
+
+`DockerContainer` / `DockerActionResult` (from `GET /api/docker/*` and `POST /api/apps/{id}/docker/*`):
+```json
+{
+  "id": "a1b2c3...",
+  "name": "searxng",
+  "image": "searxng/searxng:latest",
+  "state": "running",
+  "status": "Up 2 hours",
+  "ports": "0.0.0.0:8888->8080/tcp",
+  "createdAt": "2026-09-20T12:00:00Z"
+}
+{
+  "container": "searxng",
+  "action": "restart",
+  "success": true,
+  "status": "Up 5 seconds",
+  "state": "running",
+  "message": "restart succeeded."
+}
+```
+Exec path: `DockerService` validates `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`, runs `docker ps -a --format "{{json .}}"` (list) or `docker {start|stop|restart} <name>` via `Process` with `Docker:TimeoutSeconds` (default 30s), re-inspects after. Errors map to RFC7807 400/404. Disabled via `Docker:Enabled=false`. Requires `docker` CLI on PATH of the service user (LocalSystem needs `C:\Program Files\Docker\Docker\resources\bin` on PATH — installer does this).
+
+`HealthHistory` (from `GET /api/apps/{id}/history`) — aggregates the `app_health_checks` table:
+```json
+{
+  "points": [
+    { "status": "up", "latencyMs": 42, "checkedAtUtc": "2026-09-20T18:00:00Z" },
+    { "status": "down", "latencyMs": null, "checkedAtUtc": "2026-09-20T18:01:00Z" }
+  ],
+  "uptime": {
+    "uptimePercent": 98.5,
+    "totalChecks": 200,
+    "upCount": 197,
+    "downCount": 3,
+    "averageLatencyMs": 44.2,
+    "minLatencyMs": 12,
+    "maxLatencyMs": 210
+  }
+}
+```
+Query params: `hours` (1–720, default 24) clamps the `sinceUtc` window, `limit` (1–1000, default 200) caps rows — ordered `checked_at ASC` for charting. Missing history returns empty `points` with zeroed uptime (graceful before first probe).
 
 `SystemMetrics` (from `GET /api/system`) — CPU/RAM read via Windows
 `GetSystemTimes`/`GlobalMemoryStatusEx` (P/Invoke), disks via `DriveInfo`:
@@ -209,28 +275,58 @@ GET    /swagger                 -> Swagger UI
 }
 ```
 
+CPU and board temperatures are read by `SystemSensorService` (singleton) through
+LibreHardwareMonitor. LHM 0.9.5+ replaced the old WinRing0 driver with **PawnIO**, and its
+low-level access to the CPU thermal sensors now requires the PawnIO kernel driver to be
+installed: without it every CPU/motherboard temperature sensor enumerates but stays `null`
+(so the System panel shows no CPU temp). Install it once per host with
+`scripts/install-pawnio.ps1` (elevated); it also restarts the service. `SystemSensorService`
+logs a warning at startup when PawnIO is missing.
+
+`NetworkSample` (from `GET /api/system/network`) — rolling throughput history, newest last.
+Produced by `NetworkThroughputService` (singleton, `Api/Services`): it samples total
+bytes sent/received across up, non-loopback interfaces via the managed
+`NetworkInterface.GetAllNetworkInterfaces()` API (works on Windows and Linux), sums the
+deltas over each ~4s+ window into a ring buffer (90 points ≈ several minutes), and hands
+the buffer to the client for graphing:
+```json
+[
+  { "sampledAtUtc": "2026-09-19T18:00:05Z", "downloadBytesPerSec": 2048512.5, "uploadBytesPerSec": 131072.0 }
+]
+```
+
 ## 8. Health Checking
 
-- `HttpHealthChecker` issues an async HEAD/GET against `url` with a short timeout,
-  treats 2xx/3xx + 5xx-with-body as reachable (home services vary).
-- Runs in `Api` as a hosted `BackgroundService` every `health_check_interval_ms`
-  per enabled app with `health_check_enabled = true`.
-- Writes back only `health_status`, `last_latency_ms`, `last_health_check` — one row
-  update, no history table yet.
-- The frontend polls `GET /api/apps` every ~15s (TanStack Query refetchInterval).
+- `HttpHealthChecker` issues an async GET against `url` with a short timeout,
+  treats any reachable response as `up`, timeouts/`HttpRequestException` as `down`.
+- Runs in `Api` as a hosted `BackgroundService` (`HealthCheckBackgroundService`) every 5s tick,
+  checking due apps where `is_enabled && health_check_enabled` and `now - lastRun >= health_check_interval_ms`.
+- Each probe writes back `health_status`, `last_latency_ms`, `last_health_check` to `apps`
+  **and** inserts one row into `app_health_checks` (`DapperHealthHistoryRepository.AddAsync`)
+  via `AppService.ProbeAsync` (history is best-effort — failure does not roll back the `apps` update).
+  `ON DELETE CASCADE` cleans history when an app is removed.
+- `GET /api/apps/{id}/history` aggregates that table into `HealthHistory` (points + uptime %).
+  Hours/limit clamping lives in `AppService.GetHealthHistoryAsync`.
+- The frontend polls `GET /api/apps` every ~15s and `GET /api/apps/{id}/history` every ~30s per visible tile.
 
 ## 9. Frontend
 
 - Dark, modern dashboard. Tailwind v4 with a CSS-variable theme; one accent color,
   rounded tiles, subtle shadows, right-aligned status dots.
 - **Dashboard**: responsive flat tile grid (no category grouping). Tile = icon + name +
-  one-click open (external tab) + status dot + tag chips. Search box filters by name/tag.
+  one-click open (external tab) + status dot + tag chips + health strip. Search box filters by name/tag.
+  Each tile (`frontend/src/components/AppCard.tsx:1`) shows a compact `HealthStrip` (`HealthStrip.tsx:1`) — last 30 probes as colored bars (up=green, down=red) with 24h uptime pill — and a toggle (`monitoring` icon) that expands an inline `HealthHistoryPanel` (`HealthHistoryPanel.tsx:1`): hour selector (1h/6h/24h/7d), uptime/avg latency/checks stats, hand-rolled SVG latency line + down markers, and a dense availability bar. Strip and panel poll `GET /api/apps/{id}/history` every 30s via `useHealthHistory` (`features/apps/useHealthHistory.ts:1`) with centralized `queryKeys.appHistory`.
+  When `dockerContainer` is set, the tile also renders `DockerControls` (`components/DockerControls.tsx:1`) — container name + `state` pill (running=green pulse) + `Start`/`Stop`/`Restart` (confirm for stop) powered by `GET /api/apps/{id}/docker` + `POST /api/apps/{id}/docker/{action}` via `features/docker/useDocker.ts:1` (`queryKeys.appDocker`/`dockerContainers`, 15s poll).
   A sticky **System panel** sits beside the grid (≥xl): live CPU ring, memory and
   per-disk bars (orange accent), hostname, OS, uptime — polled every 5s via `/api/system`.
+  A **Network graph** card hangs below it: hand-rolled SVG area/line chart (no chart
+  library) of download (accent) vs upload (sky blue) throughput over a rolling window,
+  with smooth curves, hover crosshair + tooltip, and live bytes/sec readout. Polled every
+  5s via `/api/system/network`. (Upload color token `--color-upload` lives in `index.css`.)
   Content is centered at `max-w-7xl`.
 - **Manage**: CRUD table with inline create, edit drawer, delete confirm, sort order.
   Category dropdown (from `/api/categories`), Material Symbol picker, tags input.
-  Live "probe now" button per row.
+  New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker.
 - **Terminal**: full-width command prompt tab (`/terminal`). Dark terminal chrome (window
   dots, monospace output, `cwd>` prompt), shell selector (powershell/pwsh/cmd), per-tab
   `cwd` that persists across `cd` commands, history navigation (↑/↓), `clear`/`help` built-ins,
@@ -266,6 +362,11 @@ GET    /swagger                 -> Swagger UI
     "AllowedShells": ["powershell", "pwsh", "cmd"],
     "TimeoutSeconds": 30,
     "MaxOutputBytes": 100000
+  },
+  "Docker": {
+    "Enabled": true,
+    "TimeoutSeconds": 30,
+    "ExecutablePath": "docker"
   }
 }
 ```
@@ -286,6 +387,7 @@ scripts/build.ps1                        # npm build -> frontend/dist -> API www
 
 # Run / install as a service (survives reboot)
 scripts/install-service.ps1              # sc create / Windows equivalent (run as LocalSystem)
+scripts/install-pawnio.ps1               # install PawnIO driver (required for CPU temperatures)
 # then: plc <app> start (or `Start-Service MyHomeLab`)
 ```
 

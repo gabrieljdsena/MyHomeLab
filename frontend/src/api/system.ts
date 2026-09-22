@@ -1,7 +1,9 @@
 import { get, post } from './client'
-import type { SystemMetrics } from '../lib/types'
+import type { NetworkSample, SystemMetrics } from '../lib/types'
 
 export const getSystemMetrics = () => get<SystemMetrics>('/system')
+
+export const getNetworkTraffic = () => get<NetworkSample[]>('/system/network')
 
 export interface PowerResponse {
   action: string

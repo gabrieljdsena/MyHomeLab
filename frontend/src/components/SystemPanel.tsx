@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useSystemMetrics } from '../features/system/useSystem'
 import { formatBytes, formatUptime } from '../lib/format'
 import { Icon, Spinner } from './Icon'
@@ -21,16 +22,17 @@ function tempColor(celsius: number): string {
   return 'text-up'
 }
 
-function UsageRing({ percent, label }: { percent: number; label: string }) {
-  const size = 120
-  const stroke = 10
+function Ring({ percent, label }: { percent: number; label: string }) {
+  const size = 96
+  const stroke = 9
   const radius = (size - stroke) / 2
   const circumference = 2 * Math.PI * radius
   const clamped = Math.min(100, Math.max(0, percent))
   const offset = circumference - (clamped / 100) * circumference
+  const gradientId = `ring-gradient-${label}`
 
   return (
-    <div className="relative size-[120px]" aria-label={`${label} ${Math.round(clamped)}%`}>
+    <div className="relative size-24" aria-label={`${label} ${Math.round(clamped)}%`}>
       <svg width={size} height={size} className="-rotate-90">
         <circle
           cx={size / 2}
@@ -45,7 +47,7 @@ function UsageRing({ percent, label }: { percent: number; label: string }) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="url(#ring-gradient)"
+          stroke={`url(#${gradientId})`}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
@@ -53,15 +55,15 @@ function UsageRing({ percent, label }: { percent: number; label: string }) {
           className="transition-[stroke-dashoffset] duration-700 ease-out"
         />
         <defs>
-          <linearGradient id="ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="var(--color-accent)" />
             <stop offset="100%" stopColor="var(--color-accent-hover)" />
           </linearGradient>
         </defs>
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-bold tabular-nums tracking-tight">{Math.round(clamped)}%</span>
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted">{label}</span>
+        <span className="text-xl font-bold tabular-nums tracking-tight">{Math.round(clamped)}%</span>
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted">{label}</span>
       </div>
     </div>
   )
@@ -79,24 +81,20 @@ function Bar({ percent, className = '' }: { percent: number; className?: string 
   )
 }
 
-function Card({
-  title,
-  icon,
-  children,
-}: {
-  title: string
-  icon: string
-  children: React.ReactNode
-}) {
+function Group({ title, icon, children }: { title: string; icon: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface p-4">
+    <div className="border-t border-border px-4 py-4">
       <div className="mb-3 flex items-center gap-2">
-        <Icon name={icon} className="text-[17px] text-accent" />
-        <h3 className="text-sm font-semibold text-text">{title}</h3>
+        <Icon name={icon} className="text-[15px] text-muted" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
       </div>
       {children}
-    </section>
+    </div>
   )
+}
+
+function Vital({ children }: { children: ReactNode }) {
+  return <div className="flex flex-col items-center gap-2 px-4 py-4 text-center">{children}</div>
 }
 
 function DiskRow({ disk }: { disk: DiskMetric }) {
@@ -156,17 +154,15 @@ export function SystemPanel({ className = '' }: { className?: string }) {
 
   if (isLoading && !data) {
     return (
-      <aside className={`flex flex-col gap-4 ${className}`}>
-        <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface p-4">
-          <span className="flex size-10 items-center justify-center rounded-xl bg-surface-2">
-            <Icon name="monitor_heart" className="text-accent/60" />
-          </span>
+      <aside className={`rounded-2xl border border-border bg-surface ${className}`}>
+        <div className="flex items-center gap-3 p-4">
+          <span className="size-10 animate-pulse rounded-xl bg-surface-2" />
           <div className="flex-1">
             <p className="h-3.5 w-32 animate-pulse rounded bg-surface-2" />
             <p className="mt-1.5 h-2.5 w-24 animate-pulse rounded bg-surface-2" />
           </div>
         </div>
-        <div className="flex min-h-64 items-center justify-center rounded-2xl border border-border bg-surface">
+        <div className="flex min-h-40 items-center justify-center border-t border-border">
           <Spinner />
         </div>
       </aside>
@@ -175,18 +171,16 @@ export function SystemPanel({ className = '' }: { className?: string }) {
 
   if (isError || !data) {
     return (
-      <aside className={`flex flex-col gap-4 ${className}`}>
-        <section className="rounded-2xl border border-border bg-surface p-6 text-center">
-          <Icon name="monitor_heart" className="text-3xl text-muted" />
-          <p className="mt-2 text-sm text-muted">System metrics unavailable.</p>
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="mt-4 cursor-pointer rounded-lg border border-border px-4 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-text"
-          >
-            Retry
-          </button>
-        </section>
+      <aside className={`rounded-2xl border border-border bg-surface p-6 text-center ${className}`}>
+        <Icon name="monitor_heart" className="text-3xl text-muted" />
+        <p className="mt-2 text-sm text-muted">System metrics unavailable.</p>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="mt-4 cursor-pointer rounded-lg border border-border px-4 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-text"
+        >
+          Retry
+        </button>
       </aside>
     )
   }
@@ -198,8 +192,8 @@ export function SystemPanel({ className = '' }: { className?: string }) {
   const diskTempByModel = new Map(diskTemps.map((t) => [t.name, t]))
 
   return (
-    <aside className={`flex flex-col gap-4 ${className}`}>
-      <section className="flex items-center gap-3 rounded-2xl border border-border bg-surface p-4">
+    <aside className={`overflow-hidden rounded-2xl border border-border bg-surface ${className}`}>
+      <div className="flex items-center gap-3 p-4">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
           <Icon name="monitor_heart" filled className="text-[22px]" />
         </span>
@@ -210,60 +204,54 @@ export function SystemPanel({ className = '' }: { className?: string }) {
             Up {formatUptime(data.uptimeSeconds)}
           </p>
         </div>
-      </section>
+      </div>
 
-      <Card title="CPU" icon="speed">
-        <div className="flex items-center justify-between gap-4">
-          <UsageRing percent={Math.max(0, data.cpuUsagePercent)} label="used" />
-          <div className="flex flex-col items-end gap-1 text-right">
-            <span className={`text-lg font-semibold tabular-nums ${cpuTemp ? tempColor(cpuTemp.celsius) : 'text-muted'}`}>
+      <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2.5 text-[11px] text-muted/80">
+        <span className="truncate">{data.operatingSystem}</span>
+        <span className="shrink-0">
+          {data.architecture} · {data.runtimeVersion}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-border border-t border-border">
+        <Vital>
+          <Ring percent={data.cpuUsagePercent} label="cpu" />
+          <div className="space-y-0.5">
+            <p className={`text-sm font-semibold tabular-nums ${cpuTemp ? tempColor(cpuTemp.celsius) : 'text-muted'}`}>
               {cpuTemp ? `${Math.round(cpuTemp.celsius)}°C` : '—'}
-            </span>
-            <span className="text-[11px] text-muted">
-              {cpuTemp ? cpuTemp.name : 'temp unavailable'}
-            </span>
-            <span className="text-[11px] text-muted/70">{data.processorCount} cores</span>
+            </p>
+            <p className="text-[11px] text-muted/70">{cpuTemp ? cpuTemp.name : 'temp unavailable'}</p>
+            <p className="text-[11px] text-muted/70">{data.processorCount} cores</p>
           </div>
-        </div>
-      </Card>
-
-      <Card title="Memory" icon="memory">
-        <div className="flex items-baseline justify-between">
-          <p className="text-lg font-semibold tabular-nums tracking-tight">
-            {formatBytes(data.usedMemoryBytes)}
-          </p>
-          <p className="text-xs text-muted">of {formatBytes(data.totalMemoryBytes)}</p>
-        </div>
-        <Bar percent={data.memoryUsagePercent} className="mt-2" />
-        <div className="mt-2 flex justify-between text-[11px] text-muted/70">
-          <span>Used {Math.round(data.memoryUsagePercent)}%</span>
-          <span>{formatBytes(data.availableMemoryBytes)} available</span>
-        </div>
-      </Card>
+        </Vital>
+        <Vital>
+          <Ring percent={data.memoryUsagePercent} label="ram" />
+          <div className="space-y-0.5">
+            <p className="text-sm font-semibold tabular-nums">{formatBytes(data.usedMemoryBytes)}</p>
+            <p className="text-[11px] text-muted/70">of {formatBytes(data.totalMemoryBytes)}</p>
+            <p className="text-[11px] text-muted/70">{formatBytes(data.availableMemoryBytes)} free</p>
+          </div>
+        </Vital>
+      </div>
 
       {otherTemps.length > 0 && (
-        <Card title="Temperatures" icon="thermostat">
+        <Group title="Temperatures" icon="thermostat">
           <div className="flex flex-col gap-2">
             {otherTemps.map((t) => (
-              <div
-                key={`${t.component}-${t.name}`}
-                className="flex items-center justify-between gap-2 text-[13px]"
-              >
+              <div key={`${t.component}-${t.name}`} className="flex items-center justify-between gap-2 text-[13px]">
                 <span className="truncate font-medium text-text">
                   {t.component}
                   {t.name !== t.component ? ` · ${t.name}` : ''}
                 </span>
-                <span className={`shrink-0 tabular-nums ${tempColor(t.celsius)}`}>
-                  {Math.round(t.celsius)}°C
-                </span>
+                <span className={`shrink-0 tabular-nums ${tempColor(t.celsius)}`}>{Math.round(t.celsius)}°C</span>
               </div>
             ))}
           </div>
-        </Card>
+        </Group>
       )}
 
       {(disks.length > 0 || data.storageHealth.length > 0) && (
-        <Card title="Storage" icon="storage">
+        <Group title="Storage" icon="storage">
           <div className="flex flex-col gap-3.5">
             {disks.map((disk) => (
               <DiskRow key={disk.name} disk={disk} />
@@ -271,40 +259,23 @@ export function SystemPanel({ className = '' }: { className?: string }) {
             {data.storageHealth.length > 0 && (
               <div className="flex flex-col gap-3 border-t border-border pt-3.5">
                 {data.storageHealth.map((health) => (
-                  <HealthRow
-                    key={health.model}
-                    health={health}
-                    temp={diskTempByModel.get(health.model)}
-                  />
+                  <HealthRow key={health.model} health={health} temp={diskTempByModel.get(health.model)} />
                 ))}
               </div>
             )}
             {diskTemps.length > 0 && data.storageHealth.length === 0 && (
               <div className="flex flex-col gap-2 border-t border-border pt-3.5">
                 {diskTemps.map((t) => (
-                  <div
-                    key={`disk-temp-${t.name}`}
-                    className="flex items-center justify-between gap-2 text-[13px]"
-                  >
+                  <div key={`disk-temp-${t.name}`} className="flex items-center justify-between gap-2 text-[13px]">
                     <span className="truncate font-medium text-text">{t.name}</span>
-                    <span className={`shrink-0 tabular-nums ${tempColor(t.celsius)}`}>
-                      {Math.round(t.celsius)}°C
-                    </span>
+                    <span className={`shrink-0 tabular-nums ${tempColor(t.celsius)}`}>{Math.round(t.celsius)}°C</span>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        </Card>
+        </Group>
       )}
-
-      <section className="rounded-2xl border border-border bg-surface px-4 py-3 text-[11px] leading-loose text-muted">
-        <p className="truncate">{data.operatingSystem}</p>
-        <p className="flex items-center justify-between gap-2">
-          <span>{data.architecture}</span>
-          <span className="truncate text-muted/70">{data.runtimeVersion}</span>
-        </p>
-      </section>
     </aside>
   )
 }

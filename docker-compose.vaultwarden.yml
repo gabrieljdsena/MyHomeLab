@@ -1,0 +1,24 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    ports:
+      - "3012:80"
+    volumes:
+      - vaultwarden_data:/data
+      - C:/Users/gabriel/myhomelab/certs/myhomelab-lan.crt:/ssl/cert.pem:ro
+      - C:/Users/gabriel/myhomelab/certs/myhomelab-lan.key:/ssl/key.pem:ro
+    environment:
+      - WEBSOCKET_ENABLED=true
+      - SIGNUPS_ALLOWED=true # set to false after first user
+      - DOMAIN=https://192.168.15.22:3012
+      - ROCKET_TLS={certs="/ssl/cert.pem",key="/ssl/key.pem"}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:80/alive || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  vaultwarden_data:

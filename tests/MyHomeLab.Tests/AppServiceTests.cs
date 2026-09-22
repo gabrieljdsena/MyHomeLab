@@ -18,6 +18,7 @@ public class AppServiceTests
             "media",
             8096,
             ["media", "video"],
+            DockerContainer: null,
             HealthCheckEnabled: true,
             HealthCheckIntervalMs: 30_000,
             SortOrder: 10);
@@ -69,6 +70,7 @@ public class AppServiceTests
                 Category: null,
                 Port: null,
                 Tags: null,
+                DockerContainer: null,
                 HealthCheckEnabled: null,
                 IsEnabled: false,
                 HealthCheckIntervalMs: null,

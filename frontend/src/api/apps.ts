@@ -2,6 +2,7 @@ import { del, get, patch, post, put } from './client'
 import type {
   AppDetail,
   CreateAppInput,
+  HealthHistory,
   HealthResult,
   PatchAppInput,
   UpdateAppInput,
@@ -39,5 +40,8 @@ export const patchApp = (id: string, changes: PatchAppInput) =>
 export const deleteApp = (id: string) => del<void>(`/apps/${id}`)
 
 export const probeApp = (id: string) => post<HealthResult>(`/apps/${id}/check`)
+
+export const getHealthHistory = (id: string, hours = 24, limit = 200) =>
+  get<HealthHistory>(`/apps/${id}/history?hours=${hours}&limit=${limit}`)
 
 export const listCategories = () => get<string[]>(`/categories`)

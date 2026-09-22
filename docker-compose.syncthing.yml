@@ -1,0 +1,27 @@
+services:
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: syncthing
+    restart: unless-stopped
+    hostname: myhomelab
+    ports:
+      - "8384:8384" # GUI
+      - "22000:22000/tcp" # file transfers
+      - "22000:22000/udp"
+      - "21027:21027/udp" # discovery
+    volumes:
+      - syncthing_config:/var/syncthing
+      - C:/Users/gabriel/Sync:/var/syncthing/Sync
+      - D:/Sync:/var/syncthing/D-Sync:rw
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Sao_Paulo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8384/rest/noauth/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  syncthing_config:

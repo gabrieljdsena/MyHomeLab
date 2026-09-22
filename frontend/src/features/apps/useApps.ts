@@ -66,6 +66,9 @@ export function useProbeApp() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => probeApp(id),
-    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.apps }),
+    onSuccess: (_data, id) => {
+      client.invalidateQueries({ queryKey: queryKeys.apps })
+      client.invalidateQueries({ queryKey: ['apps', id, 'history'] })
+    },
   })
 }

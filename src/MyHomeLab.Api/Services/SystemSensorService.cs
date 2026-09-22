@@ -1,4 +1,5 @@
 using LibreHardwareMonitor.Hardware;
+using LibreHardwareMonitor.PawnIo;
 using MyHomeLab.Application.Dtos;
 
 namespace MyHomeLab.Api.Services;
@@ -49,6 +50,10 @@ public sealed class SystemSensorService : IDisposable
             return;
         }
 
+        // LHM 0.9.5+ dropped WinRing0 for PawnIO: without the PawnIO driver installed, every
+        // CPU/motherboard sensor enumerates but stays null (temps show as unavailable).
+        LogPawnIoStatus();
+
         // Computer.Open() with IsStorageEnabled=true hangs indefinitely on this host (DELL-SERVER1:
         // NVMe ADATA + USB Seagate bridge). We disabled storage and guard Open with a timeout so a
         // future hang on CPU/Motherboard still doesn't block temperatures forever.
@@ -93,6 +98,23 @@ public sealed class SystemSensorService : IDisposable
             {
                 return;
             }
+        }
+    }
+
+    private void LogPawnIoStatus()
+    {
+        try
+        {
+            if (!PawnIo.IsInstalled)
+            {
+                _logger.LogWarning(
+                    "PawnIO driver not installed - CPU/motherboard temperatures will be unavailable. " +
+                    "Run scripts/install-pawnio.ps1 from an elevated shell.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "PawnIO status check failed");
         }
     }
 

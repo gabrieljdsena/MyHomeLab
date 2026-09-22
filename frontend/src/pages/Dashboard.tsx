@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useApps } from '../features/apps/useApps'
 import { AppCard } from '../components/AppCard'
 import { SystemPanel } from '../components/SystemPanel'
+import { NetworkGraph } from '../components/NetworkGraph'
 import { Icon } from '../components/Icon'
 import { Spinner } from '../components/Icon'
 import { categoryLabel } from '../lib/format'
@@ -111,7 +112,10 @@ export function Dashboard() {
         )}
       </div>
 
-      <SystemPanel className="w-full xl:sticky xl:top-20 xl:self-start" />
+      <div className="flex w-full flex-col gap-4 xl:sticky xl:top-20 xl:self-start">
+        <SystemPanel />
+        <NetworkGraph />
+      </div>
     </div>
   )
 }

@@ -16,6 +16,7 @@ public class App
     public string Category { get; private set; } = "other";
     public int? Port { get; private set; }
     public string[] Tags { get; private set; } = [];
+    public string? DockerContainer { get; private set; }
     public bool HealthCheckEnabled { get; private set; } = true;
     public int HealthCheckIntervalMs { get; private set; } = 30_000;
     public AppHealthStatus HealthStatus { get; private set; } = AppHealthStatus.Unknown;
@@ -38,6 +39,7 @@ public class App
         string category,
         int? port,
         string[]? tags,
+        string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
         int sortOrder)
@@ -49,7 +51,7 @@ public class App
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         }
-        .ApplyDetails(name, url, description, icon, category, port, tags, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
+        .ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
     }
 
     public void UpdateDetails(
@@ -60,11 +62,12 @@ public class App
         string category,
         int? port,
         string[]? tags,
+        string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
         int sortOrder)
     {
-        ApplyDetails(name, url, description, icon, category, port, tags, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
+        ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
     }
 
     public void Enable()
@@ -115,6 +118,7 @@ public class App
         string category,
         int? port,
         string[] tags,
+        string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
         AppHealthStatus healthStatus,
@@ -135,6 +139,7 @@ public class App
             Category = category,
             Port = port,
             Tags = tags,
+            DockerContainer = NormalizeDockerContainer(dockerContainer),
             HealthCheckEnabled = healthCheckEnabled,
             HealthCheckIntervalMs = healthCheckIntervalMs,
             HealthStatus = healthStatus,
@@ -147,6 +152,27 @@ public class App
         };
     }
 
+    private static string? NormalizeDockerContainer(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length > 128)
+        {
+            throw new DomainException("Docker container name is too long.");
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$"))
+        {
+            throw new DomainException("Docker container name is invalid.");
+        }
+
+        return trimmed.ToLowerInvariant();
+    }
+
     private App ApplyDetails(
         string name,
         string url,
@@ -155,6 +181,7 @@ public class App
         string category,
         int? port,
         string[]? tags,
+        string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
         int sortOrder)
@@ -195,6 +222,7 @@ public class App
         Category = string.IsNullOrWhiteSpace(category) ? "other" : category.Trim().ToLowerInvariant();
         Port = port;
         Tags = tags?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+        DockerContainer = NormalizeDockerContainer(dockerContainer);
         HealthCheckEnabled = healthCheckEnabled;
         HealthCheckIntervalMs = healthCheckIntervalMs;
         SortOrder = sortOrder;
