@@ -21,6 +21,14 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
         {
             await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Conflict", ex.Message);
         }
+        catch (MachineNotFoundException ex)
+        {
+            await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found", ex.Message);
+        }
+        catch (MachineConflictException ex)
+        {
+            await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Conflict", ex.Message);
+        }
         catch (DomainException ex)
         {
             await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "Bad Request", ex.Message);

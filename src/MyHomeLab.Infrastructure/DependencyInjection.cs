@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Infrastructure.Docker;
 using MyHomeLab.Infrastructure.Health;
+using MyHomeLab.Infrastructure.Lan;
 using MyHomeLab.Infrastructure.Migrations;
 using MyHomeLab.Infrastructure.Persistence;
 using MyHomeLab.Infrastructure.System;
@@ -35,6 +36,7 @@ public static class DependencyInjection
         services.Configure<HealthOptions>(configuration.GetSection("Health"));
         services.Configure<TerminalOptions>(configuration.GetSection("Terminal"));
         services.Configure<DockerOptions>(configuration.GetSection("Docker"));
+        services.Configure<WindowsLanOptions>(configuration.GetSection("Machines"));
         services.AddHttpClient("health")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -49,6 +51,9 @@ public static class DependencyInjection
         services.AddSingleton<ITerminalService, TerminalService>();
         services.AddSingleton<IPowerService, PowerService>();
         services.AddSingleton<IDockerService, DockerService>();
+        services.AddSingleton<IMachineRepository, DapperMachineRepository>();
+        services.AddSingleton<IMachineReachabilityProbe, WindowsLanReachabilityProbe>();
+        services.AddSingleton<IPostgresMetricsReader, DapperPostgresMetricsReader>();
 
         return services;
     }

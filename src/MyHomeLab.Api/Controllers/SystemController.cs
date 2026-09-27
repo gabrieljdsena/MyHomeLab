@@ -12,6 +12,7 @@ public sealed class SystemController(
     SystemSensorService sensors,
     StorageSmartService smart,
     NetworkThroughputService network,
+    PostgresMetricsService postgres,
     IPowerService power) : ControllerBase
 {
     [HttpGet]
@@ -47,6 +48,13 @@ public sealed class SystemController(
     public IActionResult Network()
     {
         return Ok(network.GetSamples());
+    }
+
+    [HttpGet("postgres")]
+    [ProducesResponseType(typeof(PostgresMetricsDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Postgres(CancellationToken cancellationToken)
+    {
+        return Ok(await postgres.GetMetricsAsync(cancellationToken));
     }
 
     [HttpPost("power")]

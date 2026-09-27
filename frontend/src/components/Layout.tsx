@@ -71,6 +71,14 @@ export function Layout() {
               <Icon name="tune" className="text-[18px]" />
               Manage
             </NavLink>
+            <NavLink to="/machines" className={navClass}>
+              <Icon name="devices" className="text-[18px]" />
+              Machines
+            </NavLink>
+            <NavLink to="/postgres" className={navClass}>
+              <Icon name="database" className="text-[18px]" />
+              Postgres
+            </NavLink>
             <NavLink to="/terminal" className={navClass}>
               <Icon name="terminal" className="text-[18px]" />
               Terminal
@@ -151,6 +159,14 @@ export function Layout() {
               <NavLink to="/manage" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="tune" className="text-[18px]" />
                 Manage
+              </NavLink>
+              <NavLink to="/machines" className={navClassMobile} onClick={() => setMobileOpen(false)}>
+                <Icon name="devices" className="text-[18px]" />
+                Machines
+              </NavLink>
+              <NavLink to="/postgres" className={navClassMobile} onClick={() => setMobileOpen(false)}>
+                <Icon name="database" className="text-[18px]" />
+                Postgres
               </NavLink>
               <NavLink to="/terminal" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="terminal" className="text-[18px]" />

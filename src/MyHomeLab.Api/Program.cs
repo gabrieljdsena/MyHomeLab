@@ -37,11 +37,14 @@ builder.Services.AddSwaggerGen(options =>
 
 builder.Services.AddMyHomeLabInfrastructure(builder.Configuration);
 builder.Services.AddScoped<AppService>();
+builder.Services.AddScoped<MachineService>();
 builder.Services.AddSingleton<SystemMetricsService>();
 builder.Services.AddSingleton<SystemSensorService>();
 builder.Services.AddSingleton<StorageSmartService>();
 builder.Services.AddSingleton<NetworkThroughputService>();
+builder.Services.AddSingleton<PostgresMetricsService>();
 builder.Services.AddHostedService<HealthCheckBackgroundService>();
+builder.Services.AddHostedService<MachineReachabilityService>();
 
 var devOrigins = builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty;
 builder.Services.AddCors(options => options.AddPolicy("dev", policy =>

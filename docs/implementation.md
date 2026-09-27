@@ -76,7 +76,8 @@ myhomelab/
     │   ├── api/               # typed API client
     │   ├── components/        # UI components
     │   ├── features/apps/     # app card grid + CRUD forms
-    │   ├── pages/             # Dashboard, Manage, Settings
+    │   ├── features/machines/ # LAN machine reachability registry
+    │   ├── pages/             # Dashboard, Manage, Machines, Postgres, Terminal
     │   └── lib/               # query keys, utils, types
     └── dist/                  # Vite build output (copied to API wwwroot)
 ```
@@ -93,12 +94,27 @@ plugs in behind interfaces.
     `UpdateDetails(...)` guard invariants (non-empty name, valid absolute URL, docker name `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`)
   - value objects: `AppId`, `AppHealthStatus` (`Unknown | Up | Down`), `Category`
   - history entity: `AppHealthSample` (`AppId`, `Status`, `LatencyMs`, `CheckedAtUtc`) — one row per probe
+  - second aggregate: `Machine` (LAN Windows PC) — identity `MachineId`, properties `Name`, `Description`,
+    `Hostname`, `Icon`, `IsEnabled`, `SortOrder`, `Reachability`, `LastSeenUtc`, `LastLatencyMs`,
+    `LastIpAddress`, `LastMacAddress`; behavior `Enable()`, `Disable()`, `MoveTo(int)`,
+    `SetReachability(status, latencyMs, seenAtUtc)`,
+    `UpdateDetails(...)` guarding invariants (non-empty name; hostname must match
+    `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`; sort order ≥ 0).
+    The hostname allowlist keeps the value to real host shapes (NetBIOS name, FQDN, IPv4 literal) because it
+    is resolved by the probe and shown on the card — backslashes, spaces, underscores and relative segments
+    must be rejected. `LastIpAddress`/`LastMacAddress` are only ever written by `SetReachability`, which
+    ignores malformed values and leaves the previous hint in place.
 - **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` ports,
   `AppService` implementing CRUD (+ `DockerContainer`) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
   and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
-- **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` (raw SQL via Npgsql/Dapper),
-  `SqlMigrationRunner` (executes `Migrations/*.sql` in order, tracked in
-  `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe), `DockerService` (wraps `docker` CLI via `Process` — `ps -a --format "{{json .}}"`, `start/stop/restart`).
+  Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
+  `MachineService` (CRUD, `RecordReachabilityAsync`).
+- **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` + `DapperMachineRepository`
+  (raw SQL via Npgsql/Dapper),
+  `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
+  `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe), `DockerService` (wraps `docker` CLI via `Process` — `ps -a --format "{{json .}}"`, `start/stop/restart`),
+  `WindowsLanReachabilityProbe` (ICMP `Ping` + `ArpMacResolver` for the hardware address via
+  `iphlpapi!SendARP`).
 - **Api** — controllers (`AppsController`) return typed DTOs, map `404`/`400`/`409`,
   wire DI, serve `wwwroot`, top-level exception middleware returning RFC 7807 problems.
 
@@ -145,7 +161,39 @@ CREATE INDEX ix_app_health_checks_checked_at ON app_health_checks (checked_at DE
 -- Docker mapping (0006_add_docker_container.sql)
 ALTER TABLE apps ADD COLUMN docker_container TEXT;
 CREATE INDEX ix_apps_docker_container ON apps (docker_container) WHERE docker_container IS NOT NULL;
+
+-- LAN Windows PCs (0008_create_lan_machines.sql)
+CREATE TABLE lan_machines (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             TEXT NOT NULL UNIQUE,
+    description      TEXT NOT NULL DEFAULT '',
+    hostname         TEXT NOT NULL,   -- NetBIOS / FQDN / IPv4; validated + CHECK-constrained
+    icon             TEXT NOT NULL DEFAULT 'computer',
+    is_enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    reachability     TEXT NOT NULL DEFAULT 'unknown', -- unknown|online|offline
+    last_seen        TIMESTAMPTZ,
+    last_latency_ms  INTEGER,
+    last_ip          TEXT,   -- resolved IPv4 of the machine (0009)
+    last_mac         TEXT,   -- ARP hardware address, aa:bb:cc:dd:ee:ff (0009)
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_lan_machines_hostname CHECK (hostname ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'),
+    CONSTRAINT ck_lan_machines_reachability CHECK (reachability IN ('unknown', 'online', 'offline')),
+    CONSTRAINT ck_lan_machines_last_ip  CHECK (last_ip IS NULL OR last_ip ~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'),
+    CONSTRAINT ck_lan_machines_last_mac CHECK (last_mac IS NULL OR last_mac ~ '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$')
+);
+CREATE INDEX ix_lan_machines_is_enabled ON lan_machines (is_enabled);
+CREATE INDEX ix_lan_machines_sort_order ON lan_machines (sort_order, name);
+
+-- shutdown/restart from the hub was removed (0010_drop_machine_shutdown_delay.sql)
+ALTER TABLE lan_machines DROP CONSTRAINT IF EXISTS ck_lan_machines_shutdown_delay_s;
+ALTER TABLE lan_machines DROP COLUMN IF EXISTS shutdown_delay_s;
 ```
+
+`last_ip` / `last_mac` are written **only** by the reachability probe, never by the API.
+Both are hints: an offline or unresolvable machine keeps whatever it last resolved rather
+than being blanked, and a malformed value is dropped instead of failing the probe pass.
 
 Migrations live in `src/MyHomeLab.Infrastructure/Migrations/` as `NNNN_description.sql`
 and apply automatically on startup.
@@ -170,6 +218,7 @@ GET    /api/docker/containers/{name} -> DockerContainer
 POST   /api/docker/containers/{name}/{start|stop|restart} -> DockerActionResult
 GET    /api/system              -> SystemMetrics   (live CPU/RAM/disks of this host)
 GET    /api/system/network      -> NetworkSample[] (rolling ~5 min throughput history)
+GET    /api/system/postgres     -> PostgresMetrics (live vitals of the hub's own database)
 POST   /api/system/power        -> PowerResponse   (shutdown/reboot host, uses shutdown /s|/r /t 0 or shutdown -h|-r now)
 GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
@@ -224,6 +273,54 @@ GET    /swagger                 -> Swagger UI
 }
 ```
 Exec path: `DockerService` validates `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`, runs `docker ps -a --format "{{json .}}"` (list) or `docker {start|stop|restart} <name>` via `Process` with `Docker:TimeoutSeconds` (default 30s), re-inspects after. Errors map to RFC7807 400/404. Disabled via `Docker:Enabled=false`. Requires `docker` CLI on PATH of the service user (LocalSystem needs `C:\Program Files\Docker\Docker\resources\bin` on PATH — installer does this).
+
+### Machines (`/api/machines`)
+
+CRUD over `lan_machines` plus a background reachability probe. There is no power control:
+the hub can only observe whether a machine answers, it never changes its power state.
+(The header `Power` dropdown is a different, host-scoped feature — see `/api/system/power`.)
+
+| Method | Route | Returns |
+| --- | --- | --- |
+| `GET` | `/api/machines?search=&enabledOnly=` | `200` `MachineSummary[]` |
+| `GET` | `/api/machines/{id}` | `200` `MachineDetail` |
+| `POST` | `/api/machines` | `201` `MachineDetail` |
+| `PUT` | `/api/machines/{id}` | `200` `MachineDetail` |
+| `PATCH` | `/api/machines/{id}` | `200` `MachineDetail` |
+| `DELETE` | `/api/machines/{id}` | `204` |
+
+`MachineDetail`:
+```json
+{
+  "id": "uuid",
+  "name": "Gaming PC",
+  "description": "Living room desktop",
+  "hostname": "gaming-pc",
+  "icon": "computer",
+  "reachability": "online",
+  "lastSeenUtc": "2026-09-26T18:00:00Z",
+  "lastLatencyMs": 3,
+  "ipAddress": "192.168.15.9",
+  "macAddress": "f4:b5:20:5f:0a:55",
+  "isEnabled": true,
+  "sortOrder": 0,
+  "createdAtUtc": "...",
+  "updatedAtUtc": "..."
+}
+```
+
+`MachineSummary` is the same shape minus `lastSeenUtc`/`createdAtUtc`/`updatedAtUtc`. A
+duplicate name (case-insensitively) maps to RFC7807 `409`, a missing id to `404`, and a
+hostname outside the allowlist to `400`.
+
+Probe path: every `Machines:ProbeIntervalSeconds` the background service pings each enabled
+machine and writes back `reachability`, `last_seen`, `last_latency_ms`, `last_ip` and
+`last_mac`. The address is resolved as **IPv4 only** — a dual-stack host usually answers the
+echo over IPv6, and a link-local v6 address is useless as a label and cannot be resolved to a
+hardware address, so the probe takes the host's IPv4 sibling instead. `last_mac` therefore
+stays null for hosts that are reachable only off-subnet, and both fields keep their previous
+value when a pass resolves nothing. The card shows the hostname, plus the IP and MAC when
+they are known and the IP differs from the configured hostname.
 
 `HealthHistory` (from `GET /api/apps/{id}/history`) — aggregates the `app_health_checks` table:
 ```json
@@ -295,6 +392,38 @@ the buffer to the client for graphing:
 ]
 ```
 
+`PostgresMetrics` (from `GET /api/system/postgres`) — live vitals of the hub's own database.
+`DapperPostgresMetricsReader` (Infrastructure) reads the cumulative `pg_stat_*` counters for
+`current_database()` in a single round trip through the shared `NpgsqlDataSource`, and
+`PostgresMetricsService` (singleton, `Api/Services`) differences them against the previous read:
+
+| Field | Source |
+| --- | --- |
+| `version`, `uptimeSeconds` | `current_setting('server_version')`, `pg_postmaster_start_time()` |
+| `sizeBytes` | `pg_database_size(current_database())` |
+| `connectionsUsed` / `connectionsMax` / `connectionsActive` / `connectionsIdle` | `pg_stat_activity` + `max_connections` |
+| `lockWaiters` | `pg_stat_activity` where `wait_event_type = 'Lock'` |
+| `longestQuerySeconds` | oldest active query on this database |
+| `transactionsPerSecond` | Δ(`xact_commit` + `xact_rollback`) |
+| `transactionsTotal`, `rollbacksTotal`, `deadlocks` | `pg_stat_database` |
+| `cacheHitRatio` | `blks_hit / (blks_read + blks_hit)`, cumulative |
+| `tempBytesPerSecond`, `walBytesPerSecond` | Δ`temp_bytes`, Δ`pg_stat_wal.wal_bytes` |
+| `checkpointsTotal` | `pg_stat_checkpointer.num_done` |
+
+Two details worth knowing:
+
+- **Rates need two samples.** The `pg_stat_*` views are monotonic counters, so anything
+  rate-shaped is a difference between consecutive reads and reads `0` for the first ~5s after
+  the hub starts. A counter that moves *backwards* (Postgres restarted, or `pg_stat_reset()`)
+  invalidates the whole window rather than reporting a spike — same rebaseline behaviour as
+  `NetworkThroughputService`.
+- **Requires PostgreSQL 17+.** Checkpoints moved out of `pg_stat_bgwriter` into
+  `pg_stat_checkpointer` in PG 17; on an older server that one scalar subquery fails, the
+  endpoint returns a problem+json and the panel shows the group as unavailable. Everything else
+  in the query is portable back to PG 9.6.
+
+The hub connects as the bootstrap superuser, so every view is readable with no extra grants.
+
 ## 8. Health Checking
 
 - `HttpHealthChecker` issues an async GET against `url` with a short timeout,
@@ -309,6 +438,13 @@ the buffer to the client for graphing:
   Hours/limit clamping lives in `AppService.GetHealthHistoryAsync`.
 - The frontend polls `GET /api/apps` every ~15s and `GET /api/apps/{id}/history` every ~30s per visible tile.
 
+Machine reachability works the same way, on a separate loop: `MachineReachabilityService`
+(hosted `BackgroundService` in `Api/Services`) ticks every `Machines:ProbeIntervalSeconds`
+and, for each machine with `is_enabled`, calls `IMachineReachabilityProbe` (ICMP `Ping`
+in Infrastructure) and writes `reachability`, `last_seen` and `last_latency_ms` back via
+`MachineService.RecordReachabilityAsync`. Like `SetHealth`, `SetReachability` deliberately
+does not touch `updated_at` so a 30s probe never looks like a user edit.
+
 ## 9. Frontend
 
 - Dark, modern dashboard. Tailwind v4 with a CSS-variable theme; one accent color,
@@ -319,6 +455,8 @@ the buffer to the client for graphing:
   When `dockerContainer` is set, the tile also renders `DockerControls` (`components/DockerControls.tsx:1`) — container name + `state` pill (running=green pulse) + `Start`/`Stop`/`Restart` (confirm for stop) powered by `GET /api/apps/{id}/docker` + `POST /api/apps/{id}/docker/{action}` via `features/docker/useDocker.ts:1` (`queryKeys.appDocker`/`dockerContainers`, 15s poll).
   A sticky **System panel** sits beside the grid (≥xl): live CPU ring, memory and
   per-disk bars (orange accent), hostname, OS, uptime — polled every 5s via `/api/system`.
+  The `Ring`/`Bar` primitives it uses were extracted to `components/Metric.tsx:1` so the
+  Postgres page can share them.
   A **Network graph** card hangs below it: hand-rolled SVG area/line chart (no chart
   library) of download (accent) vs upload (sky blue) throughput over a rolling window,
   with smooth curves, hover crosshair + tooltip, and live bytes/sec readout. Polled every
@@ -327,13 +465,29 @@ the buffer to the client for graphing:
 - **Manage**: CRUD table with inline create, edit drawer, delete confirm, sort order.
   Category dropdown (from `/api/categories`), Material Symbol picker, tags input.
   New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker.
+- **Machines**: LAN Windows PC registry (`/machines`). Card grid (`components/MachineCard.tsx:1`) —
+  icon tile, name, description, `lan` hostname chip (plus the resolved IPv4 when it differs and the
+  ARP MAC when known), reachability dot (reuses `StatusDot` by mapping
+  `online→up` / `offline→down` / `unknown→unknown`), ICMP latency in the footer. Footer also has
+  show/hide, edit and delete. Reachability, latency and addresses come
+  from `GET /api/machines` polled every 15s. Create/Edit drawer (`components/MachineForm.tsx:1`) mirrors `AppForm`:
+  name, hostname (with the allowlist rule surfaced as help text), description, icon, sort order,
+  plus a static requirements note.
+- **Postgres** (`/postgres`): dedicated page (`pages/Postgres.tsx:1`) for the hub's own database —
+  header with version, database name, server uptime and size, then two `Ring` tiles
+  (connections used/max %, cache-hit %) over a grid of `Tile`s: throughput, WAL rate, temp-spill
+  rate, checkpoints, transactions + rollbacks, deadlocks, longest query, sessions waiting on a
+  lock. A "Needs attention" block appears only when lock waits >0, a query has run >30s, or
+  deadlocks >0. Polls `GET /api/system/postgres` every 5s via `usePostgresMetrics`
+  (`queryKeys.systemPostgres`). Lives on its own page rather than in the dashboard System panel
+  because the metric set is too tall for the ~380px sidebar column.
 - **Terminal**: full-width command prompt tab (`/terminal`). Dark terminal chrome (window
   dots, monospace output, `cwd>` prompt), shell selector (powershell/pwsh/cmd), per-tab
   `cwd` that persists across `cd` commands, history navigation (↑/↓), `clear`/`help` built-ins,
   stdout+stderr combined + truncation at `MaxOutputBytes`, timeout badge and duration. Talks to
   `POST /api/terminal/exec` via TanStack Query mutation; `GET /api/terminal/config` for
   allowlist/timeout defaults. Follows same `fetch` client + `lib/queryKeys` pattern.
-- **Header power control**: `Layout` nav shows `Dashboard | Manage | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter).
+- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
 - Single API base from same origin when served on 443; in dev, Vite proxy
   `/api → http://192.168.15.22:8080`.
@@ -367,11 +521,52 @@ the buffer to the client for graphing:
     "Enabled": true,
     "TimeoutSeconds": 30,
     "ExecutablePath": "docker"
+  },
+  "Machines": {
+    "Enabled": true,
+    "ProbeIntervalSeconds": 30,
+    "ProbeTimeoutMs": 2000
   }
 }
 ```
 Secrets never committed: connection string overridable via
 `ConnectionStrings__MyHomeLab` env var; cert via `ASPNETCORE_Kestrel__Certificates__Default__Path`.
+
+### Machines: operational requirements
+
+The Machines feature is read-only with respect to the target, so it needs no credentials
+and no Windows rights on the other machines. It does need:
+
+- The hostname to resolve **on the hub**. A NetBIOS name needs a working WINS/LAN resolution
+  path; a FQDN or an IPv4 literal always works.
+- **ICMP echo request** allowed towards the target. A blocked ping shows `unknown` and a
+  `null` latency — the machine is not reported as offline, because the probe cannot tell
+  "off" from "filtered".
+- Same-subnet addressing for `last_mac`: `ArpMacResolver` uses `SendARP`, which only answers
+  for IPv4 addresses on a directly attached network. Off-subnet targets still report
+  `online` and their IP, with `macAddress` left `null`.
+- `Machines:Enabled=false` stops the background probe entirely; machines are then never
+  updated and keep whatever reachability they last had.
+
+#### Known host interaction: ProtonVPN blocks all LAN traffic
+
+When the ProtonVPN client is connected on the hub, **every** machine in the LAN shows
+`unknown` with a `null` latency. This is not a probe or firewall bug — verified on this host:
+
+- `ProtonVPNCallout` (`ProtonVPN/ProtonVPN.CalloutDriver.sys`, a WFP callout driver) drops
+  outbound packets that do not go through the `ProTUN` tunnel, so all `192.168.15.0/24`
+  traffic is killed. `ping.exe` reports `General failure` (IP status `11050`,
+  `UnrecognizedNextHeader`), which is a *local send* error rather than a timeout.
+- `Get-NetFirewallRule -Direction Outbound -Action Block` returns **0** rules, so the block is
+  invisible to firewall rules. `Get-CimInstance Win32_SystemDriver` is what surfaces it.
+- ARP still resolves (`Get-NetNeighbor` shows `192.168.15.9` as `Reachable`) and the on-link
+  `192.168.15.0/24` route is correct, so the network itself is healthy — only IP is blocked.
+
+Fix: disconnect ProtonVPN (or enable its "Allow LAN traffic" / disable NetShield's local-network
+blocking). The hub needs `Core Networking Diagnostics - ICMP Echo Request (ICMPv4-Out)` **enabled**
+on the Wi-Fi profile for the probe to work when the VPN is off; that rule ships disabled on this
+host and outbound ping fails without it.
+
 
 ## 11. Build / Run / Deploy
 
