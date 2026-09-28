@@ -4,7 +4,9 @@ using MyHomeLab.Api.Middleware;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Services;
 using MyHomeLab.Infrastructure;
+using MyHomeLab.Infrastructure.Logging;
 using MyHomeLab.Infrastructure.Migrations;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +23,13 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
     .Enrich.FromLogContext()
     .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
-    .MinimumLevel.Override("System", LogEventLevel.Warning));
+    .MinimumLevel.Override("System", LogEventLevel.Warning)
+    // Every Error/Fatal also lands in the logs table (application='myhomelab') so the
+    // /logs page shows hub failures. The sink swallows its own failures, so a down
+    // database can never break the path that is trying to report the error.
+    .WriteTo.Sink(
+        new PostgresLogSink(services.GetRequiredService<NpgsqlDataSource>()),
+        restrictedToMinimumLevel: LogEventLevel.Error));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -38,6 +46,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddMyHomeLabInfrastructure(builder.Configuration);
 builder.Services.AddScoped<AppService>();
 builder.Services.AddScoped<MachineService>();
+builder.Services.AddScoped<LogService>();
 builder.Services.AddSingleton<SystemMetricsService>();
 builder.Services.AddSingleton<SystemSensorService>();
 builder.Services.AddSingleton<StorageSmartService>();
@@ -61,8 +70,16 @@ var app = builder.Build();
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
-    var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
-    await runner.ApplyAsync();
+    try
+    {
+        var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+        await runner.ApplyAsync();
+    }
+    catch (Exception ex)
+    {
+        Log.Fatal(ex, "Database migration failed; MyHomeLab cannot start.");
+        throw;
+    }
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();

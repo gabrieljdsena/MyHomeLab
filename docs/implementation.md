@@ -44,7 +44,7 @@ Current server inventory (seed data):
 **Backend**
 - .NET 10 (SDK 10.0.401 installed), ASP.NET Core Web API (minimal hosting model)
 - Dapper 2.x + Npgsql — everything DB is raw SQL
-- Serilog (console + file) — structured logging
+- Serilog (console + file, plus Postgres `logs` table for `Error`/`Fatal` via `PostgresLogSink`) — structured logging
 - Swagger UI (mapped to `/swagger`, enabled always on a home lab)
 - No EF Core, no MediatR, no automapper — keep the dependency surface tiny
 
@@ -110,7 +110,7 @@ plugs in behind interfaces.
   Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
   `MachineService` (CRUD, `RecordReachabilityAsync`).
   Logs side (read-only): `ILogRepository` port and `LogService` (`GetAllAsync` with
-  search/application/limit, `GetByIdAsync`) over the `logs` table - no writes from the hub.
+  search/application/limit, `GetByIdAsync`) over the `logs` table — no writes from the hub.
 - **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` + `DapperMachineRepository`
   (raw SQL via Npgsql/Dapper),
   `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
@@ -248,7 +248,7 @@ GET    /swagger                 -> Swagger UI
   "log": "startup ok"
 }
 ```
-`limit` (1-1000, default 200) caps rows - out-of-range values fall back to the
+`limit` (1–1000, default 200) caps rows — out-of-range values fall back to the
 default. `search` matches `application` or `log` (case-insensitive), `application`
 is an exact match.
 
@@ -511,7 +511,16 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   the loaded rows, newest-first list with one-line previews and click-to-expand full text
   (`<pre>`, scrollable). Polls `GET /api/logs` every 15s via `useLogs`
   (`features/logs/useLogs.ts:1`, `queryKeys.logs`). Single `LogDto` shape serves as both
-  summary and detail - no create/edit/delete.
+  summary and detail — no create/edit/delete.
+  The hub logs its own failures there too: `PostgresLogSink` (`Infrastructure/Logging`)
+  persists every Serilog `Error`/`Fatal` (unhandled 500s, terminal/power failures, probe
+  pass failures, fatal migration failure at startup) with `application='myhomelab'`.
+  `Warning`/`Information` stay on console/file only to bound table growth. The sink buffers
+  into a bounded channel (1000 entries, drops newest when full) and flushes one batched
+  `INSERT` every 2s or 50 rows; `Dispose` (via Serilog's shutdown flush) drains the queue
+  with a 10s bound. Each write has a 5s timeout and failures are swallowed with a `SelfLog`
+  note, so a down database can never break the path reporting the error — console/file
+  remain the durable backstop.
 - **Terminal**: full-width command prompt tab (`/terminal`). Dark terminal chrome (window
   dots, monospace output, `cwd>` prompt), shell selector (powershell/pwsh/cmd), per-tab
   `cwd` that persists across `cd` commands, history navigation (↑/↓), `clear`/`help` built-ins,
