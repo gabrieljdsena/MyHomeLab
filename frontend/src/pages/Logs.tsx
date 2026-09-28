@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLogs } from '../features/logs/useLogs'
 import { Icon, Spinner } from '../components/Icon'
 
@@ -7,16 +7,59 @@ function firstLine(text: string): string {
   return line.length > 160 ? `${line.slice(0, 160)}…` : line
 }
 
+function FilterOption({
+  label,
+  selected,
+  onPick,
+}: {
+  label: string
+  selected: boolean
+  onPick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      onClick={onPick}
+      className={`flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-surface-2 hover:text-text ${
+        selected ? 'bg-accent-soft font-medium text-accent' : 'text-muted'
+      }`}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {selected && <Icon name="check" className="shrink-0 text-[18px]" />}
+    </button>
+  )
+}
+
 export function Logs() {
   const [search, setSearch] = useState('')
   const [application, setApplication] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const [debounced, setDebounced] = useState('')
+  const [filterOpen, setFilterOpen] = useState(false)
+  const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebounced(search), 300)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    if (!filterOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [filterOpen])
+
+  const pickApplication = (value: string) => {
+    setApplication(value)
+    setFilterOpen(false)
+  }
 
   const { data: logs, isLoading, isError, refetch } = useLogs({
     search: debounced || undefined,
@@ -70,21 +113,43 @@ export function Logs() {
               className="w-52 bg-transparent text-text outline-none placeholder:text-muted/60"
             />
           </label>
-          <label className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted">
-            <Icon name="filter_alt" className="text-[18px]" />
-            <select
-              value={application}
-              onChange={(e) => setApplication(e.target.value)}
-              className="cursor-pointer bg-transparent text-text outline-none"
+          <div className="relative" ref={filterRef}>
+            <button
+              type="button"
+              onClick={() => setFilterOpen((v) => !v)}
+              aria-haspopup="listbox"
+              aria-expanded={filterOpen}
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-muted transition hover:border-accent/60 hover:text-text"
             >
-              <option value="">All applications</option>
-              {applications.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
+              <Icon name="filter_alt" className="text-[18px]" />
+              <span className="max-w-40 truncate">{application || 'All applications'}</span>
+              <Icon
+                name="expand_more"
+                className={`text-[16px] transition ${filterOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            {filterOpen && (
+              <div
+                role="listbox"
+                aria-label="Filter by application"
+                className="absolute right-0 z-30 mt-2 max-h-64 w-56 overflow-auto rounded-xl border border-border bg-surface py-1 shadow-xl shadow-black/30"
+              >
+                <FilterOption
+                  label="All applications"
+                  selected={application === ''}
+                  onPick={() => pickApplication('')}
+                />
+                {applications.map((name) => (
+                  <FilterOption
+                    key={name}
+                    label={name}
+                    selected={application === name}
+                    onPick={() => pickApplication(name)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
