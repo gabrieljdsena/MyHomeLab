@@ -77,7 +77,7 @@ myhomelab/
     │   ├── components/        # UI components
     │   ├── features/apps/     # app card grid + CRUD forms
     │   ├── features/machines/ # LAN machine reachability registry
-    │   ├── pages/             # Dashboard, Manage, Machines, Postgres, Terminal
+    │   ├── pages/             # Dashboard, Manage, Machines, Logs, Postgres, Terminal
     │   └── lib/               # query keys, utils, types
     └── dist/                  # Vite build output (copied to API wwwroot)
 ```
@@ -109,6 +109,8 @@ plugs in behind interfaces.
   and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
   Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
   `MachineService` (CRUD, `RecordReachabilityAsync`).
+  Logs side (read-only): `ILogRepository` port and `LogService` (`GetAllAsync` with
+  search/application/limit, `GetByIdAsync`) over the `logs` table - no writes from the hub.
 - **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` + `DapperMachineRepository`
   (raw SQL via Npgsql/Dapper),
   `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
@@ -189,6 +191,15 @@ CREATE INDEX ix_lan_machines_sort_order ON lan_machines (sort_order, name);
 -- shutdown/restart from the hub was removed (0010_drop_machine_shutdown_delay.sql)
 ALTER TABLE lan_machines DROP CONSTRAINT IF EXISTS ck_lan_machines_shutdown_delay_s;
 ALTER TABLE lan_machines DROP COLUMN IF EXISTS shutdown_delay_s;
+
+-- Append-only log entries (0011_create_logs.sql), surfaced read-only on /logs
+CREATE TABLE logs (
+    id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    application VARCHAR(255) NOT NULL,
+    log         TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX ix_logs_application ON logs (application);
+CREATE INDEX ix_logs_id_desc ON logs (id DESC);
 ```
 
 `last_ip` / `last_mac` are written **only** by the reachability probe, never by the API.
@@ -224,8 +235,22 @@ GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
 GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd)
 POST   /api/terminal/exec       -> TerminalResult (exec powershell/cmd in cwd, returns stdout+stderr)
+GET    /api/logs?search=&application=&limit=200 -> LogEntry[] (newest first, read-only)
+GET    /api/logs/{id}           -> LogEntry
 GET    /swagger                 -> Swagger UI
 ```
+
+`LogEntry`:
+```json
+{
+  "id": 42,
+  "application": "api",
+  "log": "startup ok"
+}
+```
+`limit` (1-1000, default 200) caps rows - out-of-range values fall back to the
+default. `search` matches `application` or `log` (case-insensitive), `application`
+is an exact match.
 
 `AppDetail`:
 ```json
@@ -481,13 +506,19 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   deadlocks >0. Polls `GET /api/system/postgres` every 5s via `usePostgresMetrics`
   (`queryKeys.systemPostgres`). Lives on its own page rather than in the dashboard System panel
   because the metric set is too tall for the ~380px sidebar column.
+- **Logs** (`/logs`): read-only viewer over the `logs` table (`pages/Logs.tsx:1`). Search
+  box (debounced, matches application or text) + application filter dropdown derived from
+  the loaded rows, newest-first list with one-line previews and click-to-expand full text
+  (`<pre>`, scrollable). Polls `GET /api/logs` every 15s via `useLogs`
+  (`features/logs/useLogs.ts:1`, `queryKeys.logs`). Single `LogDto` shape serves as both
+  summary and detail - no create/edit/delete.
 - **Terminal**: full-width command prompt tab (`/terminal`). Dark terminal chrome (window
   dots, monospace output, `cwd>` prompt), shell selector (powershell/pwsh/cmd), per-tab
   `cwd` that persists across `cd` commands, history navigation (↑/↓), `clear`/`help` built-ins,
   stdout+stderr combined + truncation at `MaxOutputBytes`, timeout badge and duration. Talks to
   `POST /api/terminal/exec` via TanStack Query mutation; `GET /api/terminal/config` for
   allowlist/timeout defaults. Follows same `fetch` client + `lib/queryKeys` pattern.
-- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
+- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
 - Single API base from same origin when served on 443; in dev, Vite proxy
   `/api → http://192.168.15.22:8080`.

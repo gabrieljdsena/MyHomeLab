@@ -212,3 +212,9 @@ export interface PatchMachineInput {
   isEnabled?: boolean
   sortOrder?: number
 }
+
+export interface LogEntry {
+  id: number
+  application: string
+  log: string
+}

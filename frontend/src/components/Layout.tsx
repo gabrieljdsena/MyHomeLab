@@ -75,6 +75,10 @@ export function Layout() {
               <Icon name="devices" className="text-[18px]" />
               Machines
             </NavLink>
+            <NavLink to="/logs" className={navClass}>
+              <Icon name="article" className="text-[18px]" />
+              Logs
+            </NavLink>
             <NavLink to="/postgres" className={navClass}>
               <Icon name="database" className="text-[18px]" />
               Postgres
@@ -163,6 +167,10 @@ export function Layout() {
               <NavLink to="/machines" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="devices" className="text-[18px]" />
                 Machines
+              </NavLink>
+              <NavLink to="/logs" className={navClassMobile} onClick={() => setMobileOpen(false)}>
+                <Icon name="article" className="text-[18px]" />
+                Logs
               </NavLink>
               <NavLink to="/postgres" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="database" className="text-[18px]" />
