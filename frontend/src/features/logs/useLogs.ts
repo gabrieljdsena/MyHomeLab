@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { getLog, listLogs, type LogQuery } from '../../api/logs'
+import { getLog, listLogApplications, listLogs, type LogQuery } from '../../api/logs'
 import { queryKeys } from '../../lib/queryKeys'
 
 const REFETCH_MS = 15_000
@@ -8,6 +8,16 @@ export function useLogs(query: LogQuery = {}) {
   return useQuery({
     queryKey: [...queryKeys.logs, query],
     queryFn: () => listLogs(query),
+    refetchInterval: REFETCH_MS,
+    placeholderData: (previous) => previous,
+  })
+}
+
+export function useLogApplications() {
+  return useQuery({
+    queryKey: queryKeys.logApplications,
+    queryFn: listLogApplications,
+    staleTime: 60_000,
     refetchInterval: REFETCH_MS,
   })
 }

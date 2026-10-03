@@ -7,19 +7,29 @@ namespace MyHomeLab.Application.Services;
 
 public sealed class LogService(ILogRepository repository)
 {
-    private const int MinLimit = 1;
-    private const int MaxLimit = 1000;
-    private const int DefaultLimit = 200;
+    private const int MinPage = 1;
+    private const int MinPageSize = 1;
+    private const int MaxPageSize = 100;
+    private const int DefaultPage = 1;
+    private const int DefaultPageSize = 50;
 
-    public async Task<IReadOnlyList<LogDto>> GetAllAsync(LogQuery query, CancellationToken cancellationToken = default)
+    public async Task<PagedLogDto> GetPagedAsync(LogQuery query, CancellationToken cancellationToken = default)
     {
-        var clamped = query with { Limit = ClampLimit(query.Limit) };
-        var entries = await repository.GetAllAsync(clamped, cancellationToken);
-        return entries
+        var page = query.Page < MinPage ? DefaultPage : query.Page;
+        var pageSize = query.PageSize is < MinPageSize or > MaxPageSize ? DefaultPageSize : query.PageSize;
+        var (entries, totalCount) = await repository.GetPagedAsync(
+            query with { Page = page, PageSize = pageSize },
+            cancellationToken);
+        var items = entries
             .OrderByDescending(e => e.Id)
             .Select(e => e.ToDto())
             .ToArray();
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        return new PagedLogDto(items, page, pageSize, totalCount, totalPages);
     }
+
+    public Task<IReadOnlyList<string>> GetApplicationsAsync(CancellationToken cancellationToken = default) =>
+        repository.GetApplicationsAsync(cancellationToken);
 
     public async Task<LogDto> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
@@ -30,15 +40,5 @@ public sealed class LogService(ILogRepository repository)
         }
 
         return entry.ToDto();
-    }
-
-    private static int ClampLimit(int limit)
-    {
-        if (limit is < MinLimit or > MaxLimit)
-        {
-            return DefaultLimit;
-        }
-
-        return limit;
     }
 }

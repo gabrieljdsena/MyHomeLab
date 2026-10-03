@@ -218,3 +218,11 @@ export interface LogEntry {
   application: string
   log: string
 }
+
+export interface LogPage {
+  items: LogEntry[]
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+}

@@ -14,44 +14,80 @@ public class LogServiceTests
     }
 
     [Fact]
-    public async Task GetAllAsync_Returns_Newest_First()
+    public async Task GetPagedAsync_Returns_Newest_First_With_Total()
     {
         var (service, repository) = Build();
         repository.Seed("api", "first");
         repository.Seed("worker", "second");
 
-        var all = await service.GetAllAsync(new LogQuery());
+        var page = await service.GetPagedAsync(new LogQuery());
 
-        Assert.Equal([2, 1], all.Select(e => e.Id).ToArray());
+        Assert.Equal([2, 1], page.Items.Select(e => e.Id).ToArray());
+        Assert.Equal(2, page.TotalCount);
+        Assert.Equal(1, page.Page);
+        Assert.Equal(1, page.TotalPages);
     }
 
     [Fact]
-    public async Task GetAllAsync_Filters_By_Application_And_Search()
+    public async Task GetPagedAsync_Filters_By_Application_And_Search()
     {
         var (service, repository) = Build();
         repository.Seed("api", "startup ok");
         repository.Seed("worker", "startup ok");
         repository.Seed("api", "disk full");
 
-        var byApplication = await service.GetAllAsync(new LogQuery(Application: "api"));
-        Assert.Equal(2, byApplication.Count);
-        Assert.All(byApplication, e => Assert.Equal("api", e.Application));
+        var byApplication = await service.GetPagedAsync(new LogQuery(Application: "api"));
+        Assert.Equal(2, byApplication.TotalCount);
+        Assert.All(byApplication.Items, e => Assert.Equal("api", e.Application));
 
-        var bySearch = await service.GetAllAsync(new LogQuery(Search: "disk"));
-        Assert.Single(bySearch);
-        Assert.Equal("disk full", bySearch[0].Log);
+        var bySearch = await service.GetPagedAsync(new LogQuery(Search: "disk"));
+        Assert.Single(bySearch.Items);
+        Assert.Equal("disk full", bySearch.Items[0].Log);
     }
 
     [Fact]
-    public async Task GetAllAsync_Clamps_Out_Of_Range_Limit()
+    public async Task GetPagedAsync_Paginates_Items()
+    {
+        var (service, repository) = Build();
+        for (var i = 0; i < 5; i++)
+        {
+            repository.Seed("api", $"log {i}");
+        }
+
+        var first = await service.GetPagedAsync(new LogQuery(Page: 1, PageSize: 2));
+        var second = await service.GetPagedAsync(new LogQuery(Page: 2, PageSize: 2));
+        var third = await service.GetPagedAsync(new LogQuery(Page: 3, PageSize: 2));
+
+        Assert.Equal([5, 4], first.Items.Select(e => e.Id).ToArray());
+        Assert.Equal([3, 2], second.Items.Select(e => e.Id).ToArray());
+        Assert.Equal([1], third.Items.Select(e => e.Id).ToArray());
+        Assert.Equal(5, first.TotalCount);
+        Assert.Equal(3, first.TotalPages);
+    }
+
+    [Fact]
+    public async Task GetPagedAsync_Falls_Back_To_Default_PageSize_When_Out_Of_Range()
     {
         var (service, repository) = Build();
         repository.Seed("api", "one");
 
-        var clamped = new LogQuery(Limit: 0);
-        var all = await service.GetAllAsync(clamped);
+        var page = await service.GetPagedAsync(new LogQuery(PageSize: 0));
 
-        Assert.Single(all);
+        Assert.Single(page.Items);
+        Assert.Equal(50, page.PageSize);
+    }
+
+    [Fact]
+    public async Task GetApplicationsAsync_Returns_Distinct_Sorted()
+    {
+        var (service, repository) = Build();
+        repository.Seed("worker", "one");
+        repository.Seed("api", "two");
+        repository.Seed("api", "three");
+
+        var applications = await service.GetApplicationsAsync();
+
+        Assert.Equal(["api", "worker"], applications.ToArray());
     }
 
     [Fact]

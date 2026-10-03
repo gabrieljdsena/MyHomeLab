@@ -13,25 +13,54 @@ internal sealed class DapperLogRepository(NpgsqlDataSource dataSource) : ILogRep
         log         AS "Log"
         """;
 
-    public async Task<IReadOnlyList<LogEntry>> GetAllAsync(LogQuery query, CancellationToken cancellationToken = default)
+    public async Task<(IReadOnlyList<LogEntry> Items, int TotalCount)> GetPagedAsync(LogQuery query, CancellationToken cancellationToken = default)
     {
-        const string sql = $"""
-            SELECT {Columns}
-            FROM logs
+        const string where = """
             WHERE (@Application IS NULL OR @Application = '' OR application = @Application)
               AND (@Search IS NULL OR @Search = ''
                    OR application ILIKE '%' || @Search || '%'
                    OR log ILIKE '%' || @Search || '%')
+            """;
+        var sql = $"""
+            SELECT COUNT(*)
+            FROM logs
+            {where};
+            SELECT {Columns}
+            FROM logs
+            {where}
             ORDER BY id DESC
-            LIMIT @Limit;
+            LIMIT @PageSize OFFSET @Offset;
+            """;
+
+        var offset = (query.Page - 1) * query.PageSize;
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var grid = await connection.QueryMultipleAsync(
+            sql,
+            new
+            {
+                query.Application,
+                query.Search,
+                query.PageSize,
+                Offset = offset,
+            });
+
+        var totalCount = await grid.ReadSingleAsync<int>();
+        var rows = await grid.ReadAsync<LogRow>();
+        return (rows.Select(ToEntity).ToArray(), totalCount);
+    }
+
+    public async Task<IReadOnlyList<string>> GetApplicationsAsync(CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT DISTINCT application
+            FROM logs
+            WHERE application IS NOT NULL AND application <> ''
+            ORDER BY application;
             """;
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-        var rows = await connection.QueryAsync<LogRow>(
-            sql,
-            new { query.Application, query.Search, query.Limit });
-
-        return rows.Select(ToEntity).ToArray();
+        var applications = await connection.QueryAsync<string>(sql);
+        return applications.ToArray();
     }
 
     public async Task<LogEntry?> GetByIdAsync(int id, CancellationToken cancellationToken = default)

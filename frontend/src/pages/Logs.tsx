@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useLogs } from '../features/logs/useLogs'
+import { useLogApplications, useLogs } from '../features/logs/useLogs'
 import { Icon, Spinner } from '../components/Icon'
+import { Pagination } from '../components/Pagination'
 
 function firstLine(text: string): string {
   const line = text.split('\n', 1)[0] ?? ''
@@ -38,6 +39,8 @@ export function Logs() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [debounced, setDebounced] = useState('')
   const [filterOpen, setFilterOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const filterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -58,20 +61,49 @@ export function Logs() {
 
   const pickApplication = (value: string) => {
     setApplication(value)
+    setPage(1)
+    setExpanded(null)
     setFilterOpen(false)
   }
 
-  const { data: logs, isLoading, isError, refetch } = useLogs({
+  const changeSearch = (value: string) => {
+    setSearch(value)
+    setPage(1)
+    setExpanded(null)
+  }
+
+  const changePageSize = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+    setExpanded(null)
+  }
+
+  const changePage = (next: number) => {
+    setPage(next)
+    setExpanded(null)
+  }
+
+  const { data, isLoading, isError, refetch } = useLogs({
     search: debounced || undefined,
     application: application || undefined,
+    page,
+    pageSize,
   })
+  const applicationsQuery = useLogApplications()
 
   const applications = useMemo(
-    () => [...new Set((logs ?? []).map((entry) => entry.application))].sort(),
-    [logs],
+    () => [...(applicationsQuery.data ?? [])].sort(),
+    [applicationsQuery.data],
   )
 
-  if (isLoading) {
+  // Polling can shrink the result set beneath the current page, so pull back to
+  // the last available page once server totals arrive. Adjusted during render
+  // (guarded, per React docs) instead of in an effect to avoid a cascading render.
+  if (data && data.totalPages > 0 && page > data.totalPages) {
+    setPage(data.totalPages)
+  }
+
+  if (isLoading && !data) {
     return (
       <div className="flex h-64 items-center justify-center">
         <Spinner />
@@ -79,7 +111,7 @@ export function Logs() {
     )
   }
 
-  if (isError) {
+  if (isError && !data) {
     return (
       <div className="mx-auto max-w-md rounded-2xl border border-down/40 bg-down/10 p-8 text-center">
         <p className="text-sm text-text">Failed to load logs.</p>
@@ -94,13 +126,18 @@ export function Logs() {
     )
   }
 
+  const items = data?.items ?? []
+  const totalCount = data?.totalCount ?? 0
+  const totalPages = data?.totalPages ?? 0
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
           <p className="mt-1 text-sm text-muted">
-            {(logs?.length ?? 0) + (logs?.length === 1 ? ' entry' : ' entries')}
+            {totalCount + (totalCount === 1 ? ' entry' : ' entries')}
+            {totalPages > 1 && ` · page ${page} of ${totalPages}`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -108,7 +145,7 @@ export function Logs() {
             <Icon name="search" className="text-[18px]" />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => changeSearch(e.target.value)}
               placeholder="Search application or text…"
               className="w-52 bg-transparent text-text outline-none placeholder:text-muted/60"
             />
@@ -153,42 +190,54 @@ export function Logs() {
         </div>
       </div>
 
-      {logs && logs.length > 0 ? (
-        <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-          <ul className="divide-y divide-border/60">
-            {logs.map((entry) => {
-              const open = expanded === entry.id
-              return (
-                <li key={entry.id}>
-                  <button
-                    type="button"
-                    onClick={() => setExpanded(open ? null : entry.id)}
-                    aria-expanded={open}
-                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2"
-                  >
-                    <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
-                      #{entry.id}
-                    </span>
-                    <span className="shrink-0 truncate rounded-md bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
-                      {entry.application}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-text/90">
-                      {firstLine(entry.log)}
-                    </span>
-                    <Icon
-                      name="expand_more"
-                      className={`shrink-0 text-[18px] text-muted transition ${open ? 'rotate-180' : ''}`}
-                    />
-                  </button>
-                  {open && (
-                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border/60 bg-background/60 px-4 py-3 font-mono text-[12px] leading-relaxed text-text/90">
-                      {entry.log}
-                    </pre>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+      {items.length > 0 ? (
+        <div className="space-y-3">
+          <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+            <ul className="divide-y divide-border/60">
+              {items.map((entry) => {
+                const open = expanded === entry.id
+                return (
+                  <li key={entry.id}>
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(open ? null : entry.id)}
+                      aria-expanded={open}
+                      className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2"
+                    >
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted">
+                        #{entry.id}
+                      </span>
+                      <span className="shrink-0 truncate rounded-md bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
+                        {entry.application}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-text/90">
+                        {firstLine(entry.log)}
+                      </span>
+                      <Icon
+                        name="expand_more"
+                        className={`shrink-0 text-[18px] text-muted transition ${open ? 'rotate-180' : ''}`}
+                      />
+                    </button>
+                    {open && (
+                      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border/60 bg-background/60 px-4 py-3 font-mono text-[12px] leading-relaxed text-text/90">
+                        {entry.log}
+                      </pre>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+          {totalPages > 0 && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              totalCount={totalCount}
+              totalPages={totalPages}
+              onPageChange={changePage}
+              onPageSizeChange={changePageSize}
+            />
+          )}
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-border bg-surface/50 p-12 text-center">
