@@ -57,6 +57,7 @@ public static class DependencyInjection
         services.AddSingleton<IMachineRepository, DapperMachineRepository>();
         services.AddSingleton<ILogRepository, DapperLogRepository>();
         services.AddSingleton<IMachineReachabilityProbe, WindowsLanReachabilityProbe>();
+        services.AddSingleton<ILanDiscoveryService, LanDiscoveryService>();
         services.AddSingleton<IPostgresMetricsReader, DapperPostgresMetricsReader>();
 
         return services;

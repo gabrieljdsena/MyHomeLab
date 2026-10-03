@@ -54,6 +54,7 @@ builder.Services.AddSingleton<NetworkThroughputService>();
 builder.Services.AddSingleton<PostgresMetricsService>();
 builder.Services.AddHostedService<HealthCheckBackgroundService>();
 builder.Services.AddHostedService<MachineReachabilityService>();
+builder.Services.AddHostedService<LanDiscoveryBackgroundService>();
 
 var devOrigins = builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty;
 builder.Services.AddCors(options => options.AddPolicy("dev", policy =>

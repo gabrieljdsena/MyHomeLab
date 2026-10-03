@@ -3,8 +3,11 @@ import {
   createMachine,
   deleteMachine,
   getMachine,
+  getTopology,
+  listDiscovered,
   listMachines,
   patchMachine,
+  scanNetwork,
   updateMachine,
   type MachineQuery,
 } from '../../api/machines'
@@ -62,5 +65,29 @@ export function useDeleteMachine() {
   return useMutation({
     mutationFn: (id: string) => deleteMachine(id),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.machines }),
+  })
+}
+
+export function useTopology() {
+  return useQuery({
+    queryKey: queryKeys.topology,
+    queryFn: getTopology,
+    refetchInterval: REFETCH_MS,
+  })
+}
+
+export function useDiscovered() {
+  return useQuery({
+    queryKey: queryKeys.discovered,
+    queryFn: listDiscovered,
+    refetchInterval: REFETCH_MS,
+  })
+}
+
+export function useScanNetwork() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: scanNetwork,
+    onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.discovered }),
   })
 }

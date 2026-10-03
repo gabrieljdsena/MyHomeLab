@@ -14,29 +14,33 @@ const ICON_OPTIONS = [
   { label: 'Server', value: 'dns' },
   { label: 'Game console', value: 'sports_esports' },
   { label: 'TV / media', value: 'tv' },
+  { label: 'Phone / tablet', value: 'smartphone' },
+  { label: 'Printer', value: 'printer' },
 ]
 
-function toForm(machine: MachineSummary | null): CreateMachineInput {
+function toForm(machine: MachineSummary | null, initial: CreateMachineInput | null): CreateMachineInput {
   return {
-    name: machine?.name ?? '',
-    description: machine?.description ?? '',
-    hostname: machine?.hostname ?? '',
-    icon: machine?.icon ?? 'computer',
-    sortOrder: machine?.sortOrder ?? 0,
+    name: machine?.name ?? initial?.name ?? '',
+    description: machine?.description ?? initial?.description ?? '',
+    hostname: machine?.hostname ?? initial?.hostname ?? '',
+    icon: machine?.icon ?? initial?.icon ?? 'computer',
+    sortOrder: machine?.sortOrder ?? initial?.sortOrder ?? 0,
   }
 }
 
 export function MachineForm({
   machine,
+  initial = null,
   onClose,
 }: {
   machine: MachineSummary | null
+  initial?: CreateMachineInput | null
   onClose: () => void
 }) {
   const createMutation = useCreateMachine()
   const updateMutation = useUpdateMachine()
 
-  const [form, setForm] = useState<CreateMachineInput>(() => toForm(machine))
+  const [form, setForm] = useState<CreateMachineInput>(() => toForm(machine, initial))
   const [error, setError] = useState<string | null>(null)
 
   const set = <K extends keyof CreateMachineInput>(key: K, value: CreateMachineInput[K]) =>

@@ -1,8 +1,10 @@
 import { del, get, patch, post, put } from './client'
 import type {
   CreateMachineInput,
+  DiscoveryResult,
   MachineDetail,
   MachineSummary,
+  NetworkTopology,
   PatchMachineInput,
   UpdateMachineInput,
 } from '../lib/types'
@@ -35,3 +37,9 @@ export const patchMachine = (id: string, changes: PatchMachineInput) =>
   patch<MachineDetail>(`/machines/${id}`, changes)
 
 export const deleteMachine = (id: string) => del<void>(`/machines/${id}`)
+
+export const getTopology = () => get<NetworkTopology>('/machines/topology')
+
+export const listDiscovered = () => get<DiscoveryResult>('/machines/discovered')
+
+export const scanNetwork = () => post<DiscoveryResult>('/machines/discover')

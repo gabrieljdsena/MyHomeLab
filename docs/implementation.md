@@ -333,6 +333,9 @@ the hub can only observe whether a machine answers, it never changes its power s
 | `PUT` | `/api/machines/{id}` | `200` `MachineDetail` |
 | `PATCH` | `/api/machines/{id}` | `200` `MachineDetail` |
 | `DELETE` | `/api/machines/{id}` | `204` |
+| `GET` | `/api/machines/topology` | `200` `NetworkTopology` (gateway + hub NICs with link kind + all nodes) |
+| `GET` | `/api/machines/discovered` | `200` `DiscoveryResult` (cached sightings incl. device type/icon hints) |
+| `POST` | `/api/machines/discover` | `200` `DiscoveryResult` (full scan: ping-sweep + ARP + reverse DNS + SSDP) |
 
 `MachineDetail`:
 ```json
@@ -517,7 +520,41 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   show/hide, edit and delete. Reachability, latency and addresses come
   from `GET /api/machines` polled every 15s. Create/Edit drawer (`components/MachineForm.tsx:1`) mirrors `AppForm`:
   name, hostname (with the allowlist rule surfaced as help text), description, icon, sort order,
-  plus a static requirements note.
+  plus a static requirements note. Accepts an `initial` prefill for one-click adds from discovery.
+- **Network map** (Map/Grid toggle on `/machines`, default Map): hand-rolled SVG hierarchy
+  (`components/NetworkMap.tsx:1`, no chart library) — router node on top (default gateway from
+  each NIC's `GatewayAddresses`, MAC from the ARP table, hostname via reverse DNS), hub below it,
+  registered machines in rows beneath with status-colored links and latency tooltips, discovered
+  unknowns in a dashed outer section. Layout is dynamic: ring rows and viewBox height grow with
+  node counts (fixed viewBoxes clipped labels), labels truncate with full-name tooltips, nodes
+  render their real Material Symbol glyph. Click-to-select shows a detail bar (edit/hide/delete
+  reuse the grid handlers). Data from `GET /api/machines/topology` (`NetworkTopology`: gateway +
+  hub NICs enumerated via `NetworkInterface`, same API the throughput sampler uses) polled every
+  15s via `useTopology` (`queryKeys.topology`).
+- **Cable vs Wi-Fi (honest limits)**: each hub NIC reports its link kind (`Wireless80211` →
+  wireless, Ethernet family → wired, else other), shown as `wifi`/`lan` badges under the hub with
+  per-NIC tooltips. Remote devices' medium is **not shown** — no LAN API exposes another host's
+  link medium; the wireless association table lives inside the router. Device links stay neutral
+  rather than guessing.
+- **LAN discovery** ("Discovered on LAN" section on `/machines`): transient devices that need no
+  fixed IP or hostname. `LanDiscoveryService` (Infrastructure, singleton) ping-sweeps each local
+  /24 (bounded concurrency, `DiscoveryTimeoutMs`), then harvests `GetIpNetTable` from `iphlpapi`
+  (same P/Invoke style as `ArpMacResolver`) — so ARP-but-no-ping devices still show up — with
+  best-effort reverse DNS and registry matching by IP/MAC (`DiscoveredDeviceMatcher`).
+  `POST /api/machines/discover` runs the full scan (adds `SsdpProbe`: UDP M-SEARCH multicast,
+  ~3s listen, follows `LOCATION` URLs for `friendlyName`/`modelName` — how TVs/consoles/NAS get
+  named), `GET /api/machines/discovered` serves the cache, and `LanDiscoveryBackgroundService`
+  re-scans ping+ARP only every `DiscoveryIntervalSeconds` (all gated by
+  `Machines:DiscoveryEnabled`). Device typing (`DeviceTypeGuesser`, precedence SSDP model >
+  hostname keywords > OUI vendor name; `OuiHints` is a curated ~60-entry MAC-prefix table that
+  contributes a vendor name only, since vendors make many device kinds) yields `deviceType` +
+  `suggestedIcon` shown on map nodes and list rows. Sightings live in memory (`SightingsCache`:
+  first-seen sticks, unseen past `DiscoveryExpiryMinutes` drops off) — no migration, registry
+  untouched. Frontend polls via `useDiscovered` (`queryKeys.discovered`) with a `useScanNetwork`
+  mutation behind the Scan now button; each unknown row has one-click **Add** prefilling
+  `MachineForm` (IP as hostname — always allowlist-valid — reverse-DNS name or IP as the name
+  suggestion, suggested icon pre-selected but overridable). An empty scan shows the ProtonVPN
+  hint, since the VPN blocks all LAN traffic (see below).
 - **Postgres** (`/postgres`): dedicated page (`pages/Postgres.tsx:1`) for the hub's own database —
   header with version, database name, server uptime and size, then two `Ring` tiles
   (connections used/max %, cache-hit %) over a grid of `Tile`s: throughput, WAL rate, temp-spill
@@ -598,7 +635,11 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   "Machines": {
     "Enabled": true,
     "ProbeIntervalSeconds": 30,
-    "ProbeTimeoutMs": 2000
+    "ProbeTimeoutMs": 2000,
+    "DiscoveryEnabled": true,
+    "DiscoveryIntervalSeconds": 300,
+    "DiscoveryTimeoutMs": 400,
+    "DiscoveryExpiryMinutes": 15
   },
   "FileServer": {
     "Enabled": true,
