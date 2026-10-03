@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
+import { Files } from './pages/Files'
 import { Logs } from './pages/Logs'
 import { Machines } from './pages/Machines'
 import { Manage } from './pages/Manage'
@@ -15,6 +16,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="/manage" element={<Manage />} />
           <Route path="/machines" element={<Machines />} />
+          <Route path="/files" element={<Files />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/postgres" element={<Postgres />} />
           <Route path="/terminal" element={<Terminal />} />

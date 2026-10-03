@@ -109,8 +109,9 @@ plugs in behind interfaces.
   and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
   Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
   `MachineService` (CRUD, `RecordReachabilityAsync`).
-  Logs side (read-only): `ILogRepository` port and `LogService` (`GetAllAsync` with
-  search/application/limit, `GetByIdAsync`) over the `logs` table — no writes from the hub.
+  Logs side (read-only): `ILogRepository` port and `LogService` (`GetPagedAsync` with
+  search/application/page/pageSize, `GetApplicationsAsync`, `GetByIdAsync`) over the
+  `logs` table — no writes from the hub.
 - **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` + `DapperMachineRepository`
   (raw SQL via Npgsql/Dapper),
   `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
@@ -235,8 +236,16 @@ GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
 GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd)
 POST   /api/terminal/exec       -> TerminalResult (exec powershell/cmd in cwd, returns stdout+stderr)
-GET    /api/logs?search=&application=&limit=200 -> LogEntry[] (newest first, read-only)
+GET    /api/logs?search=&application=&page=1&pageSize=50 -> PagedLogs {items, page, pageSize, totalCount, totalPages} (newest first, read-only)
+GET    /api/logs/applications   -> string[] (distinct applications, for the filter)
 GET    /api/logs/{id}           -> LogEntry
+GET    /api/files?path=         -> FileListResponse {path, entries, quotaUsedBytes, quotaMaxBytes}
+GET    /api/files/config        -> FileServerConfig {enabled, rootName, quotaMaxBytes}
+GET    /api/files/download?path= -> file bytes (attachment, range supported for media seek)
+POST   /api/files/upload?path=&overwrite= -> FileEntry[] (multipart form-data, streams to disk)
+POST   /api/files/mkdir         -> FileEntry (body {parentPath, name})
+POST   /api/files/rename        -> FileEntry (body {from, to} — rename or move)
+DELETE /api/files?path=&recursive= -> 204 (recursive=true deletes non-empty folders)
 GET    /swagger                 -> Swagger UI
 ```
 
@@ -248,9 +257,20 @@ GET    /swagger                 -> Swagger UI
   "log": "startup ok"
 }
 ```
-`limit` (1–1000, default 200) caps rows — out-of-range values fall back to the
-default. `search` matches `application` or `log` (case-insensitive), `application`
-is an exact match.
+`PagedLogs`:
+```json
+{
+  "items": [{ "id": 42, "application": "api", "log": "startup ok" }],
+  "page": 1,
+  "pageSize": 50,
+  "totalCount": 1234,
+  "totalPages": 25
+}
+```
+`page` (< 1 falls back to 1), `pageSize` (1–100, default 50 — out-of-range values
+fall back to the default). `search` matches `application` or `log`
+(case-insensitive), `application` is an exact match. `totalCount`/`totalPages`
+reflect the filtered set, so the UI can page through it.
 
 `AppDetail`:
 ```json
@@ -507,11 +527,16 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   (`queryKeys.systemPostgres`). Lives on its own page rather than in the dashboard System panel
   because the metric set is too tall for the ~380px sidebar column.
 - **Logs** (`/logs`): read-only viewer over the `logs` table (`pages/Logs.tsx:1`). Search
-  box (debounced, matches application or text) + application filter dropdown derived from
-  the loaded rows, newest-first list with one-line previews and click-to-expand full text
-  (`<pre>`, scrollable). Polls `GET /api/logs` every 15s via `useLogs`
-  (`features/logs/useLogs.ts:1`, `queryKeys.logs`). Single `LogDto` shape serves as both
-  summary and detail — no create/edit/delete.
+  box (debounced, matches application or text) + application filter dropdown (distinct
+  values from `GET /api/logs/applications` via `useLogApplications`,
+  `queryKeys.logApplications`), newest-first list with one-line previews and click-to-expand full text
+  (`<pre>`, scrollable). Server-side pagination via `GET /api/logs` (`page`/`pageSize`,
+  `LogPage` shape) polled every 15s via `useLogs` (`features/logs/useLogs.ts:1`,
+  `queryKeys.logs`, previous page kept while fetching); shared `Pagination`
+  (`components/Pagination.tsx:1`, page-number math in `lib/pagination.ts:1`) with
+  rows-per-page selector (25/50/100) and "Showing X–Y of Z". Filters and page size
+  reset to page 1. Single `LogDto` shape serves as both summary and detail —
+  no create/edit/delete.
   The hub logs its own failures there too: `PostgresLogSink` (`Infrastructure/Logging`)
   persists every Serilog `Error`/`Fatal` (unhandled 500s, terminal/power failures, probe
   pass failures, fatal migration failure at startup) with `application='myhomelab'`.
@@ -527,7 +552,15 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   stdout+stderr combined + truncation at `MaxOutputBytes`, timeout badge and duration. Talks to
   `POST /api/terminal/exec` via TanStack Query mutation; `GET /api/terminal/config` for
   allowlist/timeout defaults. Follows same `fetch` client + `lib/queryKeys` pattern.
-- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
+- **Files** (`/files`): web cloud over `C:\Shared-Server` (`FileServer` config: single jailed root, 25 GB
+  directory quota, no per-file cap). Breadcrumb + quota bar, search filter, drag-drop/multi upload with
+  progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
+  delete (recursive confirm for non-empty folders), inline image/video preview. Backend
+  (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
+  streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
+  `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +
+  `features/files/useFiles.ts` (`queryKeys.files*`) + `pages/Files.tsx:1`.
+- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
 - Single API base from same origin when served on 443; in dev, Vite proxy
   `/api → http://192.168.15.22:8080`.
@@ -566,6 +599,12 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "Enabled": true,
     "ProbeIntervalSeconds": 30,
     "ProbeTimeoutMs": 2000
+  },
+  "FileServer": {
+    "Enabled": true,
+    "RootPath": "C:\\Shared-Server",
+    "QuotaMaxBytes": 26843545600,
+    "HideSystemFiles": true
   }
 }
 ```
