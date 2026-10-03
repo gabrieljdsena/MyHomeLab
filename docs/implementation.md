@@ -592,7 +592,9 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
 - **Files** (`/files`): web cloud over `C:\Shared-Server` (`FileServer` config: single jailed root, 25 GB
   directory quota, no per-file cap). Breadcrumb + quota bar, search filter, drag-drop/multi upload with
   progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
-  delete (recursive confirm for non-empty folders), inline image/video preview. Backend
+  delete (recursive confirm for non-empty folders), inline image preview and video via
+  Plyr (`components/VideoPlayer.tsx:1`, lazy-loaded so it only downloads on first video
+  preview; Plyr ships no types, covered by a minimal `lib/plyr.d.ts`). Backend
   (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
   streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
   `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +

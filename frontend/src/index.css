@@ -73,3 +73,15 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3a3a;
 }
+
+/* Plyr theme — match the dashboard accent + dark surfaces.
+   `:root .plyr` outranks Plyr's own `:root` defaults no matter which chunk
+   loads last (the player CSS arrives lazily with VideoPlayer). */
+:root .plyr {
+  --plyr-color-main: var(--color-accent);
+  --plyr-tooltip-background: var(--color-surface-2);
+  --plyr-tooltip-color: var(--color-text);
+  --plyr-menu-background: var(--color-surface-2);
+  --plyr-menu-color: var(--color-text);
+  --plyr-menu-border-color: var(--color-border);
+}

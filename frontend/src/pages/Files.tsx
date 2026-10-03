@@ -1,7 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Icon, Spinner } from '../components/Icon'
+
+const VideoPlayer = lazy(() =>
+  import('../components/VideoPlayer').then((module) => ({ default: module.VideoPlayer })),
+)
 import { downloadUrl, uploadFiles, type FileEntry } from '../api/files'
 import {
   useDeletePath,
@@ -628,7 +632,15 @@ export function Files() {
                 className="mx-auto max-h-[60vh] rounded-xl object-contain"
               />
             ) : VIDEO_EXTS.has(preview.extension ?? '') ? (
-              <video src={downloadUrl(preview.path)} controls preload="metadata" className="mx-auto max-h-[60vh] w-full rounded-xl" />
+              <Suspense
+                fallback={
+                  <div className="flex h-48 items-center justify-center">
+                    <Spinner />
+                  </div>
+                }
+              >
+                <VideoPlayer src={downloadUrl(preview.path)} title={preview.name} />
+              </Suspense>
             ) : (
               <p className="text-sm text-muted">
                 No inline preview for this file type ({preview.extension ?? 'unknown'} · {formatBytes(preview.sizeBytes)}).
