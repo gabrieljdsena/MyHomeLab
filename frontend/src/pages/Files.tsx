@@ -39,7 +39,7 @@ function iconFor(entry: FileEntry): string {
   if (VIDEO_EXTS.has(ext)) return 'movie'
   if (TEXT_EXTS.has(ext)) return 'description'
   if (ext === 'pdf') return 'picture_as_pdf'
-  if (ext === 'zip') return 'folder_zip'
+  if (ext === 'zip' || ext === 'rar' || ext === '7z') return 'folder_zip'
   if (ext === 'apk') return 'android'
   if (ext === 'mp3' || ext === 'wav' || ext === 'ogg') return 'audio_file'
   return 'insert_drive_file'
