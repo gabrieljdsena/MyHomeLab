@@ -593,8 +593,9 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   pinned `node-pty`, `npm ci` on build, copied to output) per session; protocol is JSON frames
   (`input`/`resize` client→server, `output`/`exit`/`error` server→client). `POST /api/terminal/exec`
   remains as fallback (used automatically when PTY is disabled or WS is unreachable);
-  `GET /api/terminal/config` carries allowlist/timeout/pty flags. Follows same `fetch` client +
-  `lib/queryKeys` pattern.
+  `GET /api/terminal/config` carries allowlist/timeout/pty flags. Kestrel endpoints are pinned to
+  `Http1` — browsers negotiate HTTP/2 via ALPN and Kestrel answers WS handshakes on h2 with GOAWAY,
+  which surfaces as an instant close-1006. Follows same `fetch` client + `lib/queryKeys` pattern.
 - **Files** (`/files`): web cloud over `C:\Shared-Server` (`FileServer` config: single jailed root, 25 GB
   directory quota, no per-file cap). Breadcrumb + quota bar, search filter, drag-drop/multi upload with
   progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
@@ -620,8 +621,8 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
 {
   "Kestrel": {
     "Endpoints": {
-      "Https443": { "Url": "https://0.0.0.0:443" },
-      "Http8080": { "Url": "http://0.0.0.0:8080" }
+      "Https443": { "Url": "https://0.0.0.0:443", "Protocols": "Http1" },
+      "Http8080": { "Url": "http://0.0.0.0:8080", "Protocols": "Http1" }
     }
   },
   "ConnectionStrings": {
