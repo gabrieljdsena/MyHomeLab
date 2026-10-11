@@ -639,6 +639,14 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "PtyIdleTimeoutSeconds": 600,
     "PtyMaxLifetimeSeconds": 3600
   },
+  "Toolchain": {
+    "NodeExecutable": null,
+    "PythonExecutable": null,
+    "GitExecutable": null,
+    "SevenZipExecutable": null,
+    "FfmpegExecutable": null,
+    "OpencodeExecutable": null
+  },
   "Docker": {
     "Enabled": true,
     "TimeoutSeconds": 30,
@@ -715,10 +723,26 @@ scripts/build.ps1                        # npm build -> frontend/dist -> API www
 # Run / install as a service (survives reboot)
 scripts/install-service.ps1              # sc create / Windows equivalent (run as LocalSystem)
 scripts/install-pawnio.ps1               # install PawnIO driver (required for CPU temperatures)
+scripts/install-tools.ps1                # ensure machine-wide toolchain (see below; also runs inside install-service)
 # then: plc <app> start (or `Start-Service MyHomeLab`)
 ```
 
 Output single deployable: `MyHomeLab.Api` serves everything on :443/:8080.
+
+### Toolchain: operational requirements
+
+The API service runs as LocalSystem, so user-level installs (scoop shims,
+WindowsApps aliases, user `PATH`) are invisible to it. Everything the hub shells
+out to must be installed machine-wide and on the machine `PATH`:
+`scripts/install-tools.ps1` (elevated, idempotent, `.\scripts\install-tools.ps1 -Check`
+for dry-run) ensures pinned versions — Node.js 22.23.3 (PTY bridge), Python 3.13.15,
+Git 2.55.0.5, 7-Zip 26.04, FFmpeg 9.0.2, opencode 1.18.35 (pinned GitHub zip into
+`C:\Tools\MyHomeLab`) — via winget machine scope plus machine-PATH wiring. curl ships
+inbox. The API logs the resolved toolchain (`Toolchain: node=… (…)`) at startup and
+warns when Node is missing (interactive terminal sessions fail without it); per-tool
+overrides live under `Toolchain:*` in appsettings.json. Note: opencode *model auth*
+lives in the user profile, so the service needs provider keys via machine env
+(`OPENCODE_*`) — the binary alone is not enough.
 
 ## 12. Acceptance Criteria
 

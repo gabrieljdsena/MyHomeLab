@@ -30,6 +30,15 @@ if (-not (Test-Path $dll)) {
     throw "Published output not found. Run .\scripts\build.ps1 first (missing: $dll)"
 }
 
+# Runtime toolchain (node/python/git/7zip/ffmpeg/opencode) must be visible to
+# the SYSTEM service via machine PATH. Safe to re-run; skips what's present.
+$toolsScript = Join-Path $PSScriptRoot 'install-tools.ps1'
+if (Test-Path $toolsScript) {
+    Write-Host "[tools] ensuring machine-wide toolchain..."
+    & $toolsScript
+    if ($LASTEXITCODE -ne 0) { throw "install-tools.ps1 failed (exit $LASTEXITCODE)" }
+}
+
 if (-not (Get-Service $ServiceName -ErrorAction SilentlyContinue)) {
     # HTTPS cert: reuse a generated pfx or create one for the LAN hostname.
     if (-not (Test-Path $certFile)) {
