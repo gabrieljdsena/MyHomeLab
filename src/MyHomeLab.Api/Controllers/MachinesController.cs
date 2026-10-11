@@ -8,8 +8,30 @@ namespace MyHomeLab.Api.Controllers;
 
 [ApiController]
 [Route("api/machines")]
-public sealed class MachinesController(MachineService machineService) : ControllerBase
+public sealed class MachinesController(MachineService machineService, ILanDiscoveryService discovery) : ControllerBase
 {
+    [HttpGet("topology")]
+    [ProducesResponseType(typeof(NetworkTopologyDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTopology(CancellationToken cancellationToken)
+    {
+        var nodes = await machineService.GetAllAsync(new MachineQuery(), cancellationToken);
+        return Ok(new NetworkTopologyDto(discovery.GetGateway(), discovery.GetHub(), nodes));
+    }
+
+    [HttpGet("discovered")]
+    [ProducesResponseType(typeof(DiscoveryResultDto), StatusCodes.Status200OK)]
+    public IActionResult GetDiscovered()
+    {
+        return Ok(discovery.GetLatest());
+    }
+
+    [HttpPost("discover")]
+    [ProducesResponseType(typeof(DiscoveryResultDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Discover(CancellationToken cancellationToken)
+    {
+        return Ok(await discovery.ScanFullAsync(cancellationToken));
+    }
+
     [HttpGet]
     [ProducesResponseType(typeof(MachineSummaryDto[]), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMachines(

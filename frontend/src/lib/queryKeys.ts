@@ -12,4 +12,12 @@ export const queryKeys = {
   appDocker: (id: string) => ['apps', id, 'docker'] as const,
   machines: ['machines'] as const,
   machine: (id: string) => ['machines', id] as const,
+  topology: ['machines', 'topology'] as const,
+  discovered: ['machines', 'discovered'] as const,
+  logs: ['logs'] as const,
+  log: (id: number) => ['logs', id] as const,
+  logApplications: ['logs', 'applications'] as const,
+  files: ['files'] as const,
+  filesConfig: ['files', 'config'] as const,
+  fileList: (path: string) => ['files', path] as const,
 }

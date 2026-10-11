@@ -212,3 +212,61 @@ export interface PatchMachineInput {
   isEnabled?: boolean
   sortOrder?: number
 }
+
+export interface HubInterface {
+  name: string
+  ipv4: string
+  subnet: string
+  macAddress: string | null
+  kind: string
+  gatewayIp: string | null
+}
+
+export interface HubNode {
+  hostName: string
+  interfaces: HubInterface[]
+}
+
+export interface GatewayNode {
+  ipAddress: string
+  macAddress: string | null
+  hostname: string | null
+}
+
+export interface NetworkTopology {
+  gateway: GatewayNode | null
+  hub: HubNode
+  nodes: MachineSummary[]
+}
+
+export interface DiscoveredDevice {
+  ipAddress: string
+  macAddress: string | null
+  hostname: string | null
+  deviceType: string | null
+  suggestedIcon: string | null
+  firstSeenUtc: string
+  lastSeenUtc: string
+  matchedMachineId: string | null
+  matchedMachineName: string | null
+}
+
+export interface DiscoveryResult {
+  devices: DiscoveredDevice[]
+  scannedAtUtc: string
+  subnets: string[]
+}
+
+export interface LogEntry {
+  id: number
+  application: string
+  log: string
+}
+
+export interface LogPage {
+  items: LogEntry[]
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+}
