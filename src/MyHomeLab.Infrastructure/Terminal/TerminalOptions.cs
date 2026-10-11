@@ -13,4 +13,12 @@ public sealed class TerminalOptions
     public int MaxOutputBytes { get; set; } = 100_000;
 
     public string? DefaultWorkingDirectory { get; set; }
+
+    public bool PtyEnabled { get; set; } = true;
+
+    public int PtyMaxSessions { get; set; } = 4;
+
+    public int PtyIdleTimeoutSeconds { get; set; } = 600;
+
+    public int PtyMaxLifetimeSeconds { get; set; } = 3600;
 }

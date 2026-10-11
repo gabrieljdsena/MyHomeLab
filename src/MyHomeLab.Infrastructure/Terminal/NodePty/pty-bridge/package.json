@@ -1,0 +1,14 @@
+{
+  "name": "myhomelab-pty-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PTY sidecar for MyHomeLab terminal: bridges node-pty shells to NDJSON over stdio.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node pty-bridge.js"
+  },
+  "dependencies": {
+    "node-pty": "1.1.0"
+  }
+}

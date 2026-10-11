@@ -9,6 +9,7 @@ using MyHomeLab.Infrastructure.Migrations;
 using MyHomeLab.Infrastructure.Persistence;
 using MyHomeLab.Infrastructure.System;
 using MyHomeLab.Infrastructure.Terminal;
+using MyHomeLab.Infrastructure.Toolchain;
 using Npgsql;
 
 namespace MyHomeLab.Infrastructure;
@@ -36,6 +37,7 @@ public static class DependencyInjection
 
         services.Configure<HealthOptions>(configuration.GetSection("Health"));
         services.Configure<TerminalOptions>(configuration.GetSection("Terminal"));
+        services.Configure<ToolchainOptions>(configuration.GetSection("Toolchain"));
         services.Configure<FileServerOptions>(configuration.GetSection("FileServer"));
         services.Configure<DockerOptions>(configuration.GetSection("Docker"));
         services.Configure<WindowsLanOptions>(configuration.GetSection("Machines"));
@@ -51,6 +53,8 @@ public static class DependencyInjection
         services.AddSingleton<IHealthHistoryRepository, DapperHealthHistoryRepository>();
         services.AddSingleton<IHealthChecker, HttpHealthChecker>();
         services.AddSingleton<ITerminalService, TerminalService>();
+        services.AddSingleton<ITerminalPtyService, TerminalPtyService>();
+        services.AddSingleton<IToolchainService, ToolchainService>();
         services.AddSingleton<IFileServerService, FileSystemFileService>();
         services.AddSingleton<IPowerService, PowerService>();
         services.AddSingleton<IDockerService, DockerService>();

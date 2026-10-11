@@ -1,5 +1,6 @@
 using Serilog;
 using Serilog.Events;
+using MyHomeLab.Api.Endpoints;
 using MyHomeLab.Api.Middleware;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Services;
@@ -87,9 +88,11 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyHomeLab API v1"));
 app.UseCors("dev");
+app.UseWebSockets();
 app.UseStaticFiles();
 
 app.MapControllers();
+app.MapTerminalPty();
 app.MapFallbackToFile("index.html");
 
 TryLogStartupUrls(app);

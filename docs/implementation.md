@@ -234,8 +234,9 @@ GET    /api/system/postgres     -> PostgresMetrics (live vitals of the hub's own
 POST   /api/system/power        -> PowerResponse   (shutdown/reboot host, uses shutdown /s|/r /t 0 or shutdown -h|-r now)
 GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
-GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd)
+GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd, pty flags)
 POST   /api/terminal/exec       -> TerminalResult (exec powershell/cmd in cwd, returns stdout+stderr)
+WS     /api/terminal/ws         -> interactive PTY (xterm.js frontend, persistent shell, ANSI streaming)
 GET    /api/logs?search=&application=&page=1&pageSize=50 -> PagedLogs {items, page, pageSize, totalCount, totalPages} (newest first, read-only)
 GET    /api/logs/applications   -> string[] (distinct applications, for the filter)
 GET    /api/logs/{id}           -> LogEntry
@@ -583,12 +584,17 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   with a 10s bound. Each write has a 5s timeout and failures are swallowed with a `SelfLog`
   note, so a down database can never break the path reporting the error — console/file
   remain the durable backstop.
-- **Terminal**: full-width command prompt tab (`/terminal`). Dark terminal chrome (window
-  dots, monospace output, `cwd>` prompt), shell selector (powershell/pwsh/cmd), per-tab
-  `cwd` that persists across `cd` commands, history navigation (↑/↓), `clear`/`help` built-ins,
-  stdout+stderr combined + truncation at `MaxOutputBytes`, timeout badge and duration. Talks to
-  `POST /api/terminal/exec` via TanStack Query mutation; `GET /api/terminal/config` for
-  allowlist/timeout defaults. Follows same `fetch` client + `lib/queryKeys` pattern.
+- **Terminal**: full-width interactive tab (`/terminal`). Dark terminal chrome (window
+  dots, xterm.js + FitAddon + WebLinksAddon, lazy-loaded chunk), shell selector (powershell/pwsh/cmd),
+  real persistent shell over `WS /api/terminal/ws` — streaming ANSI output, tab completion, `Ctrl+C`,
+  resize, fullscreen TUIs (`opencode`, editors). One WS connection = one shell process, killed on
+  disconnect; idle sessions die after `PtyIdleTimeoutSeconds`, max `PtyMaxSessions` concurrent.
+  Backend (`TerminalPtyEndpoint` + `TerminalPtyService`) spawns a Node sidecar (`Terminal/NodePty/pty-bridge`,
+  pinned `node-pty`, `npm ci` on build, copied to output) per session; protocol is JSON frames
+  (`input`/`resize` client→server, `output`/`exit`/`error` server→client). `POST /api/terminal/exec`
+  remains as fallback (used automatically when PTY is disabled or WS is unreachable);
+  `GET /api/terminal/config` carries allowlist/timeout/pty flags. Follows same `fetch` client +
+  `lib/queryKeys` pattern.
 - **Files** (`/files`): web cloud over `C:\Shared-Server` (`FileServer` config: single jailed root, 25 GB
   directory quota, no per-file cap). Breadcrumb + quota bar, search filter, drag-drop/multi upload with
   progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
@@ -627,7 +633,11 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "DefaultShell": "powershell",
     "AllowedShells": ["powershell", "pwsh", "cmd"],
     "TimeoutSeconds": 30,
-    "MaxOutputBytes": 100000
+    "MaxOutputBytes": 100000,
+    "PtyEnabled": true,
+    "PtyMaxSessions": 4,
+    "PtyIdleTimeoutSeconds": 600,
+    "PtyMaxLifetimeSeconds": 3600
   },
   "Docker": {
     "Enabled": true,

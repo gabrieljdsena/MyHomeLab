@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTerminalConfig, useTerminalExec } from '../features/terminal/useTerminal'
 import { Icon, Spinner } from '../components/Icon'
+
+const TerminalPty = lazy(() => import('../features/terminal/TerminalPty').then((m) => ({ default: m.TerminalPty })))
 
 type HistoryEntry = {
   id: number
@@ -23,7 +25,7 @@ function formatExit(exitCode: number, timedOut: boolean): string {
   return `exit ${exitCode}`
 }
 
-export function Terminal() {
+export function TerminalExec() {
   const { data: config, isLoading: configLoading, isError: configError } = useTerminalConfig()
   const execMutation = useTerminalExec()
 
@@ -455,6 +457,63 @@ export function Terminal() {
           </li>
         </ul>
       </div>
+    </div>
+  )
+}
+
+export function Terminal() {
+  const { data: config, isLoading: configLoading, isError: configError } = useTerminalConfig()
+  const [shellOverride, setShellOverride] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
+
+  const allowedShells = useMemo(() => {
+    const raw = config?.allowedShells ?? ['powershell', 'cmd']
+    return [...new Set(raw.map((s) => s.toLowerCase()))]
+  }, [config])
+
+  const shell = shellOverride ?? config?.defaultShell ?? 'powershell'
+
+  if (configLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner />
+      </div>
+    )
+  }
+
+  if (configError || !config) {
+    return <TerminalExec />
+  }
+
+  if (!config.enabled) {
+    return <TerminalExec />
+  }
+
+  if (!config.ptyEnabled) {
+    return <TerminalExec />
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col">
+      <Suspense
+        fallback={
+          <div className="flex h-64 items-center justify-center">
+            <Spinner />
+          </div>
+        }
+      >
+        <TerminalPty
+          key={`${shell}-${nonce}`}
+          shell={shell}
+          shells={allowedShells}
+          config={config}
+          onShellChange={(s) => {
+            setShellOverride(s)
+            setNonce((n) => n + 1)
+          }}
+          onReconnect={() => setNonce((n) => n + 1)}
+        />
+      </Suspense>
     </div>
   )
 }
