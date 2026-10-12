@@ -1,5 +1,6 @@
 using Serilog;
 using Serilog.Events;
+using MyHomeLab.Api.Endpoints;
 using MyHomeLab.Api.Middleware;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Services;
@@ -87,12 +88,15 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyHomeLab API v1"));
 app.UseCors("dev");
+app.UseWebSockets();
 app.UseStaticFiles();
 
 app.MapControllers();
+app.MapTerminalPty();
 app.MapFallbackToFile("index.html");
 
 TryLogStartupUrls(app);
+TryLogToolchain(app);
 
 app.Run();
 
@@ -101,6 +105,29 @@ static void TryLogStartupUrls(WebApplication app)
     foreach (var address in app.Urls)
     {
         app.Logger.LogInformation("Now listening on {Address}", address);
+    }
+}
+
+static void TryLogToolchain(WebApplication app)
+{
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var toolchain = scope.ServiceProvider.GetRequiredService<MyHomeLab.Application.Abstractions.IToolchainService>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var tools = toolchain.ProbeAllAsync(cts.Token).GetAwaiter().GetResult();
+        app.Logger.LogInformation(
+            "Toolchain: {Summary}",
+            string.Join(", ", tools.Select(t => t.Found ? $"{t.Name}={t.Path} ({t.Version})" : $"{t.Name}=missing")));
+        if (tools.Any(t => t.Name == "node" && !t.Found))
+        {
+            app.Logger.LogWarning(
+                "Node.js was not found on PATH. Interactive terminal sessions will fail. Run scripts/install-tools.ps1 elevated, then restart the service.");
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Toolchain probe failed; interactive features may be degraded.");
     }
 }
 

@@ -31,7 +31,10 @@ public sealed class TerminalService(IOptions<TerminalOptions> options, ILogger<T
             allowed,
             config.TimeoutSeconds,
             config.MaxOutputBytes,
-            defaultDir);
+            defaultDir,
+            config.PtyEnabled && OperatingSystem.IsWindows(),
+            Math.Clamp(config.PtyMaxSessions, 1, 16),
+            Math.Clamp(config.PtyIdleTimeoutSeconds, 60, 7200));
     }
 
     public async Task<TerminalExecuteResponse> ExecuteAsync(TerminalExecuteRequest request, CancellationToken cancellationToken)

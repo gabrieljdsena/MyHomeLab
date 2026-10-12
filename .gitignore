@@ -9,6 +9,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/.tmp/
 
+# PTY bridge (node-pty installed via npm ci at build time)
+src/MyHomeLab.Infrastructure/Terminal/NodePty/pty-bridge/node_modules/
+
 # API static output (regenerated from frontend/dist on build)
 src/MyHomeLab.Api/wwwroot/
 

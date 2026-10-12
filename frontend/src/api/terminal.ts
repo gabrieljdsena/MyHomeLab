@@ -25,6 +25,9 @@ export interface TerminalConfig {
   timeoutSeconds: number
   maxOutputBytes: number
   defaultWorkingDirectory: string
+  ptyEnabled: boolean
+  ptyMaxSessions: number
+  ptyIdleTimeoutSeconds: number
 }
 
 export const getTerminalConfig = () => get<TerminalConfig>('/terminal/config')

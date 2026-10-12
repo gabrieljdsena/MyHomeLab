@@ -22,4 +22,16 @@ public record TerminalConfigDto(
     IReadOnlyList<string> AllowedShells,
     int TimeoutSeconds,
     int MaxOutputBytes,
-    string DefaultWorkingDirectory);
+    string DefaultWorkingDirectory,
+    bool PtyEnabled,
+    int PtyMaxSessions,
+    int PtyIdleTimeoutSeconds);
+
+public record TerminalPtyConfig(
+    bool Enabled,
+    string DefaultShell,
+    IReadOnlyList<string> AllowedShells,
+    string DefaultWorkingDirectory,
+    int MaxSessions,
+    int IdleTimeoutSeconds,
+    int MaxLifetimeSeconds);

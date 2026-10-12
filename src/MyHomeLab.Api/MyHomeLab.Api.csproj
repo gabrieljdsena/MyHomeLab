@@ -35,4 +35,19 @@
     <Copy SourceFiles="@(_FrontendSource)" DestinationFiles="@(_FrontendSource->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
+  <ItemGroup>
+    <Content Include="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\**\*"
+             Exclude="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\node_modules\.package-lock.json"
+             Link="pty-bridge\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="EnsurePtyBridgeDeps" BeforeTargets="BeforeBuild" Condition="!Exists('$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\node_modules\node-pty')">
+    <Exec Command="npm ci --omit=dev" WorkingDirectory="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge" ContinueOnError="WarnAndContinue">
+      <Output TaskParameter="ExitCode" PropertyName="PtyNpmExitCode" />
+    </Exec>
+    <Message Text="PTY bridge dependencies missing and npm install failed (exit $(PtyNpmExitCode)). Run 'npm ci' in src/MyHomeLab.Infrastructure/Terminal/NodePty/pty-bridge manually; interactive terminal sessions will fail until then." Condition="'$(PtyNpmExitCode)' != '0'" Importance="high" />
+  </Target>
+
 </Project>
