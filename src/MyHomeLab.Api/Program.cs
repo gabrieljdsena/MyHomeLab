@@ -1,5 +1,6 @@
 using Serilog;
 using Serilog.Events;
+using Microsoft.AspNetCore.Http.Features;
 using MyHomeLab.Api.Endpoints;
 using MyHomeLab.Api.Middleware;
 using MyHomeLab.Api.Services;
@@ -33,6 +34,13 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
         restrictedToMinimumLevel: LogEventLevel.Error));
 
 builder.Services.AddControllers();
+builder.Services.Configure<FormOptions>(options =>
+{
+    // Single-file uploads above this size must use the chunked session protocol
+    // (POST /api/files/uploads/*); chunks are 8 MB, well under this cap.
+    options.MultipartBodyLengthLimit = 32 * 1024 * 1024;
+    options.MemoryBufferThreshold = 64 * 1024;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {

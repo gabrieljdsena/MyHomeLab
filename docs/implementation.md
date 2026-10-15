@@ -243,7 +243,12 @@ GET    /api/logs/{id}           -> LogEntry
 GET    /api/files?path=         -> FileListResponse {path, entries, quotaUsedBytes, quotaMaxBytes}
 GET    /api/files/config        -> FileServerConfig {enabled, rootName, quotaMaxBytes}
 GET    /api/files/download?path= -> file bytes (attachment, range supported for media seek)
-POST   /api/files/upload?path=&overwrite= -> FileEntry[] (multipart form-data, streams to disk)
+POST   /api/files/upload?path=&overwrite= -> FileEntry[] (multipart form-data, streams to disk; batch is pre-validated so conflicts/quota fail before anything is written)
+POST   /api/files/uploads/init     -> UploadSession {uploadId, totalChunks, chunkSizeBytes, receivedChunks[]} (body {directory, fileName, totalSizeBytes, totalChunks, overwrite}; validates name/quota/conflict up front so large uploads fail fast at 0% instead of 96%)
+GET    /api/files/uploads/{uploadId} -> UploadSession (resume bitmap: which chunk indexes are stored)
+PUT    /api/files/uploads/{uploadId}/chunks/{index} -> 204 (raw octet-stream body, Content-Length required; 8 MB chunks with per-chunk retry)
+POST   /api/files/uploads/{uploadId}/complete -> FileEntry (verifies all chunks, concatenates atomically, enforces quota)
+DELETE /api/files/uploads/{uploadId} -> 204 (aborts; stale sessions swept after FileServer:UploadSessionTtlHours)
 POST   /api/files/mkdir         -> FileEntry (body {parentPath, name})
 POST   /api/files/rename        -> FileEntry (body {from, to} — rename or move)
 DELETE /api/files?path=&recursive= -> 204 (recursive=true deletes non-empty folders)
@@ -601,11 +606,16 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
   delete (recursive confirm for non-empty folders), inline image preview and video via
   Plyr (`components/VideoPlayer.tsx:1`, lazy-loaded so it only downloads on first video
-  preview; Plyr ships no types, covered by a minimal `lib/plyr.d.ts`). Backend
-  (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
-  streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
-  `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +
-  `features/files/useFiles.ts` (`queryKeys.files*`) + `pages/Files.tsx:1`.
+   preview; Plyr ships no types, covered by a minimal `lib/plyr.d.ts`). Backend
+   (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
+   streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
+   `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +
+   `features/files/useFiles.ts` (`queryKeys.files*`) + `pages/Files.tsx:1`.
+   Files larger than 8 MB (`lib/chunks.ts` `SINGLE_UPLOAD_MAX_BYTES`) upload through the chunked
+   session protocol above (`api/files.ts` `uploadFileChunked`: 8 MB `PUT` chunks, sequential with
+   3x exponential-backoff retry per chunk, byte-weighted progress across mixed small/large batches,
+   best-effort abort on failure); smaller files keep the single-POST path. Session temp lives in
+   `<root>/.upload-tmp/{uploadId}/`, hidden from listings and excluded from quota until completed.
 - **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
 - Single API base from same origin when served on 443; in dev, Vite proxy
@@ -666,7 +676,10 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "Enabled": true,
     "RootPath": "C:\\Shared-Server",
     "QuotaMaxBytes": 26843545600,
-    "HideSystemFiles": true
+    "HideSystemFiles": true,
+    "UploadChunkBytes": 8388608,
+    "UploadTempDirName": ".upload-tmp",
+    "UploadSessionTtlHours": 24
   }
 }
 ```

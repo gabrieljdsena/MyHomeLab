@@ -18,6 +18,10 @@ public interface IFileServerService
         bool overwrite,
         CancellationToken cancellationToken);
 
+    bool Exists(string? relativeDir, string fileName);
+
+    void EnsureQuotaAvailable(long requiredBytes);
+
     FileEntryDto CreateDirectory(string? parentPath, string name);
 
     FileEntryDto Move(string from, string to);
@@ -25,4 +29,26 @@ public interface IFileServerService
     void Delete(string relativePath, bool recursive);
 
     long GetUsedBytes();
+
+    UploadSessionDto InitUploadSession(
+        string? relativeDir,
+        string fileName,
+        long totalSizeBytes,
+        int totalChunks,
+        bool overwrite);
+
+    UploadSessionDto GetUploadSession(string uploadId);
+
+    Task AppendUploadChunkAsync(
+        string uploadId,
+        int chunkIndex,
+        Stream content,
+        long chunkLength,
+        CancellationToken cancellationToken);
+
+    Task<FileEntryDto> CompleteUploadSessionAsync(
+        string uploadId,
+        CancellationToken cancellationToken);
+
+    void AbortUploadSession(string uploadId);
 }

@@ -9,4 +9,10 @@ public sealed class FileServerOptions
     public long QuotaMaxBytes { get; set; } = 25L * 1024 * 1024 * 1024;
 
     public bool HideSystemFiles { get; set; } = true;
+
+    public int UploadChunkBytes { get; set; } = 8 * 1024 * 1024;
+
+    public string UploadTempDirName { get; set; } = ".upload-tmp";
+
+    public int UploadSessionTtlHours { get; set; } = 24;
 }
