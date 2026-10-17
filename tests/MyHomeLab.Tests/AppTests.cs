@@ -148,6 +148,8 @@ public class AppTests
             8096,
             ["media"],
             null,
+            null,
+            null,
             true,
             30_000,
             AppHealthStatus.Up,
@@ -193,5 +195,72 @@ public class AppTests
 
         app.UpdateDetails("X", "http://localhost:1234", "desc", "web", "other", null, null, "  ", true, 30_000, 0);
         Assert.Null(app.DockerContainer);
+    }
+
+    [Fact]
+    public void Create_Normalizes_Deploy_Target()
+    {
+        var app = App.Create(
+            "X",
+            "http://localhost",
+            "desc",
+            "web",
+            "other",
+            null,
+            null,
+            null,
+            true,
+            30_000,
+            0,
+            serviceName: "  Hathor  ",
+            buildScriptPath: @"  C:\scripts\build.ps1  ");
+
+        Assert.Equal("Hathor", app.ServiceName);
+        Assert.Equal(@"C:\scripts\build.ps1", app.BuildScriptPath);
+    }
+
+    [Fact]
+    public void Create_Clears_Blank_Deploy_Target()
+    {
+        var app = App.Create("X", "http://localhost", "desc", "web", "other", null, null, null, true, 30_000, 0, "   ", "  ");
+        Assert.Null(app.ServiceName);
+        Assert.Null(app.BuildScriptPath);
+    }
+
+    [Fact]
+    public void Create_Rejects_Invalid_ServiceName()
+    {
+        var ex = Assert.Throws<DomainException>(() =>
+            App.Create("X", "http://localhost", "desc", "web", "other", null, null, null, true, 30_000, 0, serviceName: "bad;name"));
+        Assert.Equal("Service name is invalid.", ex.Message);
+    }
+
+    [Fact]
+    public void Create_Rejects_Relative_BuildScriptPath()
+    {
+        var ex = Assert.Throws<DomainException>(() =>
+            App.Create("X", "http://localhost", "desc", "web", "other", null, null, null, true, 30_000, 0, buildScriptPath: @"scripts\build.ps1"));
+        Assert.Equal("Build script path must be an absolute .ps1 path.", ex.Message);
+    }
+
+    [Fact]
+    public void Create_Rejects_NonPs1_BuildScriptPath()
+    {
+        var ex = Assert.Throws<DomainException>(() =>
+            App.Create("X", "http://localhost", "desc", "web", "other", null, null, null, true, 30_000, 0, buildScriptPath: @"C:\scripts\build.cmd"));
+        Assert.Equal("Build script path must be an absolute .ps1 path.", ex.Message);
+    }
+
+    [Fact]
+    public void UpdateDetails_Sets_And_Clears_Deploy_Target()
+    {
+        var app = CreateApp();
+        app.UpdateDetails("X", "http://localhost:1234", "desc", "web", "other", null, null, null, true, 30_000, 0, "Hathor", @"C:\scripts\build.ps1");
+        Assert.Equal("Hathor", app.ServiceName);
+        Assert.Equal(@"C:\scripts\build.ps1", app.BuildScriptPath);
+
+        app.UpdateDetails("X", "http://localhost:1234", "desc", "web", "other", null, null, null, true, 30_000, 0, "  ", "  ");
+        Assert.Null(app.ServiceName);
+        Assert.Null(app.BuildScriptPath);
     }
 }

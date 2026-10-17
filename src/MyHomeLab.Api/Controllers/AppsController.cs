@@ -8,7 +8,11 @@ namespace MyHomeLab.Api.Controllers;
 
 [ApiController]
 [Route("api/apps")]
-public sealed class AppsController(AppService appService, IHealthChecker healthChecker, IDockerService dockerService) : ControllerBase
+public sealed class AppsController(
+    AppService appService,
+    IHealthChecker healthChecker,
+    IDockerService dockerService,
+    IDeployService deployService) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType(typeof(AppDetailDto[]), StatusCodes.Status200OK)]
@@ -114,6 +118,46 @@ public sealed class AppsController(AppService appService, IHealthChecker healthC
         }
 
         return Ok(container);
+    }
+
+    [HttpPost("{id:guid}/deploy")]
+    [ProducesResponseType(typeof(DeployStatusDto), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeployApp(Guid id, CancellationToken cancellationToken)
+    {
+        var app = await appService.GetByIdAsync(AppId.From(id), cancellationToken);
+        if (string.IsNullOrWhiteSpace(app.ServiceName) || string.IsNullOrWhiteSpace(app.BuildScriptPath))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Not Configured",
+                Detail = "App has no deploy configuration (service name and build script path).",
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        var status = await deployService.StartDeployAsync(id, app.ServiceName, app.BuildScriptPath, cancellationToken);
+        return Accepted(status);
+    }
+
+    [HttpGet("{id:guid}/deploy")]
+    [ProducesResponseType(typeof(DeployStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDeployStatus(Guid id, CancellationToken cancellationToken)
+    {
+        var status = await deployService.GetDeployStatusAsync(id, cancellationToken);
+        if (status is null)
+        {
+            return NotFound(new ProblemDetails
+            {
+                Title = "Not Found",
+                Detail = "No deploy has been started for this app.",
+                Status = StatusCodes.Status404NotFound,
+            });
+        }
+
+        return Ok(status);
     }
 
     [HttpPost("{id:guid}/docker/{dockerAction}")]

@@ -9,7 +9,9 @@ public record AppBaseDto(
     string Category,
     int? Port,
     string[] Tags,
-    string? DockerContainer);
+    string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath);
 
 public record AppSummaryDto(
     Guid Id,
@@ -21,10 +23,12 @@ public record AppSummaryDto(
     int? Port,
     string[] Tags,
     string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath,
     string HealthStatus,
     int? LastLatencyMs,
     bool IsEnabled,
-    int SortOrder) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer);
+    int SortOrder) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer, ServiceName, BuildScriptPath);
 
 public record AppDetailDto(
     Guid Id,
@@ -36,6 +40,8 @@ public record AppDetailDto(
     int? Port,
     string[] Tags,
     string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     string HealthStatus,
@@ -44,7 +50,7 @@ public record AppDetailDto(
     bool IsEnabled,
     int SortOrder,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer);
+    DateTime UpdatedAtUtc) : AppBaseDto(Id, Name, Description, Url, Icon, Category, Port, Tags, DockerContainer, ServiceName, BuildScriptPath);
 
 public record CreateAppRequest(
     string Name,
@@ -55,6 +61,8 @@ public record CreateAppRequest(
     int? Port,
     string[] Tags,
     string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     int SortOrder);
@@ -68,6 +76,8 @@ public record UpdateAppRequest(
     int? Port,
     string[] Tags,
     string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath,
     bool HealthCheckEnabled,
     int HealthCheckIntervalMs,
     int SortOrder);
@@ -81,9 +91,20 @@ public record PatchAppRequest(
     int? Port,
     string[]? Tags,
     string? DockerContainer,
+    string? ServiceName,
+    string? BuildScriptPath,
     bool? HealthCheckEnabled,
     bool? IsEnabled,
     int? HealthCheckIntervalMs,
     int? SortOrder);
 
 public record HealthResultDto(string Status, int? LatencyMs);
+
+public record DeployStatusDto(
+    Guid AppId,
+    string State,
+    string Message,
+    int? ExitCode,
+    string OutputTail,
+    DateTime StartedAtUtc,
+    DateTime UpdatedAtUtc);

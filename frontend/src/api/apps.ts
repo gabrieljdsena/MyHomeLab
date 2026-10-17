@@ -1,7 +1,8 @@
-import { del, get, patch, post, put } from './client'
+import { del, get, patch, post, put, HttpError } from './client'
 import type {
   AppDetail,
   CreateAppInput,
+  DeployStatus,
   HealthHistory,
   HealthResult,
   PatchAppInput,
@@ -40,6 +41,17 @@ export const patchApp = (id: string, changes: PatchAppInput) =>
 export const deleteApp = (id: string) => del<void>(`/apps/${id}`)
 
 export const probeApp = (id: string) => post<HealthResult>(`/apps/${id}/check`)
+
+export const deployApp = (id: string) => post<DeployStatus>(`/apps/${id}/deploy`)
+
+export const getDeployStatus = async (id: string): Promise<DeployStatus | null> => {
+  try {
+    return await get<DeployStatus>(`/apps/${id}/deploy`)
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null
+    throw err
+  }
+}
 
 export const getHealthHistory = (id: string, hours = 24, limit = 200) =>
   get<HealthHistory>(`/apps/${id}/history?hours=${hours}&limit=${limit}`)

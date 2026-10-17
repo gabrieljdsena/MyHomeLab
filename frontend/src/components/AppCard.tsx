@@ -1,17 +1,19 @@
 import { useState } from 'react'
 import type { AppDetail } from '../lib/types'
 import { formatLatency } from '../lib/format'
+import { resolveAppUrl } from '../lib/resolveAppUrl'
 import { Icon } from './Icon'
 import { StatusDot } from './StatusDot'
 import { HealthStrip } from './HealthStrip'
 import { HealthHistoryPanel } from './HealthHistoryPanel'
 import { DockerControls } from './DockerControls'
+import { DeployControls } from './DeployControls'
 
 export function AppCard({ app }: { app: AppDetail }) {
   const [expanded, setExpanded] = useState(false)
   const open = () => {
     if (!app.isEnabled) return
-    window.open(app.url, '_blank', 'noopener,noreferrer')
+    window.open(resolveAppUrl(app.url, window.location.hostname), '_blank', 'noopener,noreferrer')
   }
 
   const handleCardClick = () => {
@@ -91,6 +93,12 @@ export function AppCard({ app }: { app: AppDetail }) {
       {app.dockerContainer && app.isEnabled && (
         <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <DockerControls appId={app.id} containerName={app.dockerContainer} />
+        </div>
+      )}
+
+      {app.serviceName && app.buildScriptPath && app.isEnabled && (
+        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <DeployControls app={app} />
         </div>
       )}
 

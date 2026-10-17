@@ -10,6 +10,7 @@ export const queryKeys = {
   dockerContainers: ['docker', 'containers'] as const,
   dockerContainer: (name: string) => ['docker', 'containers', name] as const,
   appDocker: (id: string) => ['apps', id, 'docker'] as const,
+  appDeploy: (id: string) => ['apps', id, 'deploy'] as const,
   machines: ['machines'] as const,
   machine: (id: string) => ['machines', id] as const,
   topology: ['machines', 'topology'] as const,

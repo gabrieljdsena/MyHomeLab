@@ -104,8 +104,8 @@ plugs in behind interfaces.
     is resolved by the probe and shown on the card — backslashes, spaces, underscores and relative segments
     must be rejected. `LastIpAddress`/`LastMacAddress` are only ever written by `SetReachability`, which
     ignores malformed values and leaves the previous hint in place.
-- **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` ports,
-  `AppService` implementing CRUD (+ `DockerContainer`) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
+- **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` + `IDeployService` ports,
+  `AppService` implementing CRUD (+ `DockerContainer`, deploy target) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
   and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
   Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
   `MachineService` (CRUD, `RecordReachabilityAsync`).
@@ -116,6 +116,7 @@ plugs in behind interfaces.
   (raw SQL via Npgsql/Dapper),
   `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
   `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe), `DockerService` (wraps `docker` CLI via `Process` — `ps -a --format "{{json .}}"`, `start/stop/restart`),
+  `DeployService` (spawns a detached PowerShell wrapper that runs an app's `build.ps1`, then restarts the mapped Windows service, reporting progress through status files — `Deploy:TimeoutSeconds`, `Deploy:StateDirectory`),
   `WindowsLanReachabilityProbe` (ICMP `Ping` + `ArpMacResolver` for the hardware address via
   `iphlpapi!SendARP`).
 - **Api** — controllers (`AppsController`) return typed DTOs, map `404`/`400`/`409`,
@@ -164,6 +165,14 @@ CREATE INDEX ix_app_health_checks_checked_at ON app_health_checks (checked_at DE
 -- Docker mapping (0006_add_docker_container.sql)
 ALTER TABLE apps ADD COLUMN docker_container TEXT;
 CREATE INDEX ix_apps_docker_container ON apps (docker_container) WHERE docker_container IS NOT NULL;
+
+-- Deploy targets (0012_add_deploy_config.sql): build script + Windows service per app.
+-- 0013_seed_deploy_config.sql points Hathor at its build.ps1/service and registers
+-- the hub itself (MyHomeLab) with the same deploy target.
+-- 0014_add_aiwaifu_deploy_target.sql points the AI Waifu Assistant tile at its
+-- NSSM service ('AIWaifuAssistant') and scripts\build.ps1.
+ALTER TABLE apps ADD COLUMN service_name TEXT;
+ALTER TABLE apps ADD COLUMN build_script_path TEXT;
 
 -- LAN Windows PCs (0008_create_lan_machines.sql)
 CREATE TABLE lan_machines (
@@ -225,6 +234,8 @@ POST   /api/apps/{id}/check     -> 200 {status, latencyMs}   (manual probe now)
 GET    /api/apps/{id}/history?hours=24&limit=200 -> HealthHistory {points, uptime}
 GET    /api/apps/{id}/docker    -> DockerContainer (200) or 404 if no mapping / not found
 POST   /api/apps/{id}/docker/{start|stop|restart} -> DockerActionResult
+POST   /api/apps/{id}/deploy    -> 202 DeployStatus (starts a detached build+restart; 400 if no deploy target)
+GET    /api/apps/{id}/deploy    -> DeployStatus (poll target; 404 if no deploy has run for the app)
 GET    /api/docker/containers   -> DockerContainer[]
 GET    /api/docker/containers/{name} -> DockerContainer
 POST   /api/docker/containers/{name}/{start|stop|restart} -> DockerActionResult
@@ -290,6 +301,8 @@ reflect the filtered set, so the UI can page through it.
   "port": 8888,
   "tags": ["search"],
   "dockerContainer": "searxng",
+  "serviceName": null,
+  "buildScriptPath": null,
   "healthCheckEnabled": true,
   "healthCheckIntervalMs": 30000,
   "healthStatus": "up",
@@ -324,6 +337,20 @@ reflect the filtered set, so the UI can page through it.
 }
 ```
 Exec path: `DockerService` validates `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`, runs `docker ps -a --format "{{json .}}"` (list) or `docker {start|stop|restart} <name>` via `Process` with `Docker:TimeoutSeconds` (default 30s), re-inspects after. Errors map to RFC7807 400/404. Disabled via `Docker:Enabled=false`. Requires `docker` CLI on PATH of the service user (LocalSystem needs `C:\Program Files\Docker\Docker\resources\bin` on PATH — installer does this).
+
+`DeployStatus` (from `POST /api/apps/{id}/deploy` and `GET /api/apps/{id}/deploy`):
+```json
+{
+  "appId": "94c5ab2c-…",
+  "state": "building",
+  "message": "Running C:\\Users\\gabriel\\myhomelab\\scripts\\build.ps1...",
+  "exitCode": null,
+  "outputTail": "…tail of the build output…",
+  "startedAtUtc": "2026-10-16T09:31:02.145Z",
+  "updatedAtUtc": "2026-10-16T09:31:02.145Z"
+}
+```
+Deploy path: the app must have both `serviceName` and `buildScriptPath` (validated by the `App` aggregate: service name `^[a-zA-Z0-9][a-zA-Z0-9 _.\-]*$`, script path absolute `.ps1`), otherwise `400`. `POST` writes a generated `deploy.ps1` wrapper + `status.json` under `Deploy:StateDirectory` (`C:\ProgramData\MyHomeLab\deploys\{appId}`, temp fallback) and launches the wrapper **detached** (`UseShellExecute`, hidden window) so it survives the API restarting itself; it returns `202` immediately. The wrapper runs `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <build.ps1>` from the script's directory (output redirected into `deploy.log`), then on exit 0 restarts the service (`Restart-Service` if running, `Start-Service` otherwise); on failure it starts the service if the script left it stopped. States: `queued → building → restarting → done|failed`; `GET` returns the latest status (404 if none) with the log tail (`Deploy:OutputTailChars`). A deploy still active after `Deploy:TimeoutSeconds` (default 1800s) + 300s is considered stale and a new one may start. Runs as the service user (LocalSystem when installed via `scripts/install-service.ps1`, so it can restart services and rebuild in-place).
 
 ### Machines (`/api/machines`)
 
@@ -507,6 +534,7 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   one-click open (external tab) + status dot + tag chips + health strip. Search box filters by name/tag.
   Each tile (`frontend/src/components/AppCard.tsx:1`) shows a compact `HealthStrip` (`HealthStrip.tsx:1`) — last 30 probes as colored bars (up=green, down=red) with 24h uptime pill — and a toggle (`monitoring` icon) that expands an inline `HealthHistoryPanel` (`HealthHistoryPanel.tsx:1`): hour selector (1h/6h/24h/7d), uptime/avg latency/checks stats, hand-rolled SVG latency line + down markers, and a dense availability bar. Strip and panel poll `GET /api/apps/{id}/history` every 30s via `useHealthHistory` (`features/apps/useHealthHistory.ts:1`) with centralized `queryKeys.appHistory`.
   When `dockerContainer` is set, the tile also renders `DockerControls` (`components/DockerControls.tsx:1`) — container name + `state` pill (running=green pulse) + `Start`/`Stop`/`Restart` (confirm for stop) powered by `GET /api/apps/{id}/docker` + `POST /api/apps/{id}/docker/{action}` via `features/docker/useDocker.ts:1` (`queryKeys.appDocker`/`dockerContainers`, 15s poll).
+  When `serviceName` + `buildScriptPath` are set, the tile renders `DeployControls` (`components/DeployControls.tsx:1`): a `Redeploy` button (`refresh` icon; confirm dialog showing the script + service) calling `POST /api/apps/{id}/deploy`, then live polling of `GET /api/apps/{id}/deploy` every 3s via `useDeployStatus` (`features/apps/useApps.ts:1`, `queryKeys.appDeploy`) — state (queued/building/restarting) with a spinner, the final result (done/failed) with an expandable tail of the build output, and a retry note while the service is offline mid-restart.
   A sticky **System panel** sits beside the grid (≥xl): live CPU ring, memory and
   per-disk bars (orange accent), hostname, OS, uptime — polled every 5s via `/api/system`.
   The `Ring`/`Bar` primitives it uses were extracted to `components/Metric.tsx:1` so the
@@ -516,9 +544,19 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   with smooth curves, hover crosshair + tooltip, and live bytes/sec readout. Polled every
   5s via `/api/system/network`. (Upload color token `--color-upload` lives in `index.css`.)
   Content is centered at `max-w-7xl`.
+- **Remote access (Tailscale)**: tile links are host-aware — `AppCard` resolves the stored
+  URL host against `window.location.hostname` via `lib/resolveAppUrl.ts:1` (scheme, port and
+  path preserved), so the same tiles work whether the dashboard is loaded from the LAN IP or
+  from the Tailscale hostname (`dell-server1` / `dell-server1.tail1f7af5.ts.net`). Reaching
+  the app ports over Tailscale also needs an inbound firewall rule scoped to the `Tailscale`
+  interface (rule `MyHomeLab apps (Tailscale)`: TCP 1234 LLM, 3012 Vaultwarden, 5000 AI Waifu,
+  5001 Kavita, 8096 Jellyfin, 8443 RomM, 8888 SearXNG); `Profile=Any` rules already cover
+  443/8080 (hub), 80 (Pi-hole) and 5051 (Hathor). Docker-published ports and the Python/LLM/
+  Jellyfin apps only had `Public`-profile rules, hence the gap. https tiles (RomM, Vaultwarden)
+  show a certificate warning on the Tailscale hostname until their certs gain that SAN.
 - **Manage**: CRUD table with inline create, edit drawer, delete confirm, sort order.
   Category dropdown (from `/api/categories`), Material Symbol picker, tags input.
-  New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker.
+  New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker — plus the deploy target fields (`Deploy: service name`, `Deploy: build script`, both optional).
 - **Machines**: LAN Windows PC registry (`/machines`). Card grid (`components/MachineCard.tsx:1`) —
   icon tile, name, description, `lan` hostname chip (plus the resolved IPv4 when it differs and the
   ARP MAC when known), reachability dot (reuses `StatusDot` by mapping
@@ -732,7 +770,7 @@ scripts/create-db.ps1                    # create DB + grants
 scripts/dev.ps1                          # watch API on 8080 + Vite dev on 5173 (proxy /api)
 
 # Production build
-scripts/build.ps1                        # npm build -> frontend/dist -> API wwwroot, dotnet publish
+scripts/build.ps1                        # npm build -> frontend/dist -> API wwwroot, dotnet publish to staging, stop/swap/start MyHomeLab around the swap (-NoRestart to skip)
 
 # Run / install as a service (survives reboot)
 scripts/install-service.ps1              # sc create / Windows equivalent (run as LocalSystem)

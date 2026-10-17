@@ -17,6 +17,8 @@ public class App
     public int? Port { get; private set; }
     public string[] Tags { get; private set; } = [];
     public string? DockerContainer { get; private set; }
+    public string? ServiceName { get; private set; }
+    public string? BuildScriptPath { get; private set; }
     public bool HealthCheckEnabled { get; private set; } = true;
     public int HealthCheckIntervalMs { get; private set; } = 30_000;
     public AppHealthStatus HealthStatus { get; private set; } = AppHealthStatus.Unknown;
@@ -42,7 +44,9 @@ public class App
         string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
-        int sortOrder)
+        int sortOrder,
+        string? serviceName = null,
+        string? buildScriptPath = null)
     {
         var now = DateTime.UtcNow;
         return new App
@@ -51,7 +55,7 @@ public class App
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         }
-        .ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
+        .ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder, serviceName, buildScriptPath);
     }
 
     public void UpdateDetails(
@@ -65,9 +69,11 @@ public class App
         string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
-        int sortOrder)
+        int sortOrder,
+        string? serviceName = null,
+        string? buildScriptPath = null)
     {
-        ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder);
+        ApplyDetails(name, url, description, icon, category, port, tags, dockerContainer, healthCheckEnabled, healthCheckIntervalMs, sortOrder, serviceName, buildScriptPath);
     }
 
     public void Enable()
@@ -119,6 +125,8 @@ public class App
         int? port,
         string[] tags,
         string? dockerContainer,
+        string? serviceName,
+        string? buildScriptPath,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
         AppHealthStatus healthStatus,
@@ -140,6 +148,8 @@ public class App
             Port = port,
             Tags = tags,
             DockerContainer = NormalizeDockerContainer(dockerContainer),
+            ServiceName = NormalizeServiceName(serviceName),
+            BuildScriptPath = NormalizeBuildScriptPath(buildScriptPath),
             HealthCheckEnabled = healthCheckEnabled,
             HealthCheckIntervalMs = healthCheckIntervalMs,
             HealthStatus = healthStatus,
@@ -173,6 +183,48 @@ public class App
         return trimmed.ToLowerInvariant();
     }
 
+    private static string? NormalizeServiceName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length > 255)
+        {
+            throw new DomainException("Service name is too long.");
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^[a-zA-Z0-9][a-zA-Z0-9 _.\-]*$"))
+        {
+            throw new DomainException("Service name is invalid.");
+        }
+
+        return trimmed;
+    }
+
+    private static string? NormalizeBuildScriptPath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length > 512)
+        {
+            throw new DomainException("Build script path is too long.");
+        }
+
+        if (!Path.IsPathFullyQualified(trimmed) || !trimmed.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DomainException("Build script path must be an absolute .ps1 path.");
+        }
+
+        return trimmed;
+    }
+
     private App ApplyDetails(
         string name,
         string url,
@@ -184,7 +236,9 @@ public class App
         string? dockerContainer,
         bool healthCheckEnabled,
         int healthCheckIntervalMs,
-        int sortOrder)
+        int sortOrder,
+        string? serviceName,
+        string? buildScriptPath)
     {
         var trimmedName = name?.Trim();
         if (string.IsNullOrWhiteSpace(trimmedName))
@@ -223,6 +277,8 @@ public class App
         Port = port;
         Tags = tags?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         DockerContainer = NormalizeDockerContainer(dockerContainer);
+        ServiceName = NormalizeServiceName(serviceName);
+        BuildScriptPath = NormalizeBuildScriptPath(buildScriptPath);
         HealthCheckEnabled = healthCheckEnabled;
         HealthCheckIntervalMs = healthCheckIntervalMs;
         SortOrder = sortOrder;

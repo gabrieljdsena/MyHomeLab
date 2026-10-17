@@ -55,6 +55,8 @@ function toForm(app: AppDetail | null): CreateAppInput {
     port: app?.port ?? null,
     tags: app?.tags ?? [],
     dockerContainer: app?.dockerContainer ?? null,
+    serviceName: app?.serviceName ?? null,
+    buildScriptPath: app?.buildScriptPath ?? null,
     healthCheckEnabled: app?.healthCheckEnabled ?? true,
     healthCheckIntervalMs: app?.healthCheckIntervalMs ?? 30_000,
     sortOrder: app?.sortOrder ?? 0,
@@ -272,6 +274,35 @@ export function AppForm({
             </datalist>
             <p className="mt-1 text-[11px] text-muted/60">Leave empty for native/remote apps. When set, tile shows start/stop/restart.</p>
           </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">
+                Deploy: service name
+              </span>
+              <input
+                className={inputClass}
+                value={form.serviceName ?? ''}
+                onChange={(e) => set('serviceName', e.target.value === '' ? null : e.target.value)}
+                placeholder="Hathor"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">
+                Deploy: build script
+              </span>
+              <input
+                className={inputClass}
+                value={form.buildScriptPath ?? ''}
+                onChange={(e) => set('buildScriptPath', e.target.value === '' ? null : e.target.value)}
+                placeholder="C:\path\build.ps1"
+              />
+            </label>
+          </div>
+          <p className="-mt-2 text-[11px] text-muted/60">
+            Deploy runs the script, then restarts the service. Tile shows a Deploy button when both are set.
+          </p>
 
           <label className="block">
             <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted">

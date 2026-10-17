@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MyHomeLab.Application.Abstractions;
+using MyHomeLab.Infrastructure.Deploy;
 using MyHomeLab.Infrastructure.Docker;
 using MyHomeLab.Infrastructure.FileServer;
 using MyHomeLab.Infrastructure.Health;
@@ -40,6 +41,7 @@ public static class DependencyInjection
         services.Configure<ToolchainOptions>(configuration.GetSection("Toolchain"));
         services.Configure<FileServerOptions>(configuration.GetSection("FileServer"));
         services.Configure<DockerOptions>(configuration.GetSection("Docker"));
+        services.Configure<DeployOptions>(configuration.GetSection("Deploy"));
         services.Configure<WindowsLanOptions>(configuration.GetSection("Machines"));
         services.AddHttpClient("health")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
@@ -58,6 +60,7 @@ public static class DependencyInjection
         services.AddSingleton<IFileServerService, FileSystemFileService>();
         services.AddSingleton<IPowerService, PowerService>();
         services.AddSingleton<IDockerService, DockerService>();
+        services.AddSingleton<IDeployService, DeployService>();
         services.AddSingleton<IMachineRepository, DapperMachineRepository>();
         services.AddSingleton<ILogRepository, DapperLogRepository>();
         services.AddSingleton<IMachineReachabilityProbe, WindowsLanReachabilityProbe>();
