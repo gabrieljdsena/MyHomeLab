@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
+using MyHomeLab.Application.Services;
 
 namespace MyHomeLab.Api.Controllers;
 
@@ -13,6 +14,8 @@ public sealed class SystemController(
     StorageSmartService smart,
     NetworkThroughputService network,
     PostgresMetricsService postgres,
+    SqlWorkbenchService workbench,
+    IPostgresCatalogReader catalog,
     IPowerService power) : ControllerBase
 {
     [HttpGet]
@@ -55,6 +58,21 @@ public sealed class SystemController(
     public async Task<IActionResult> Postgres(CancellationToken cancellationToken)
     {
         return Ok(await postgres.GetMetricsAsync(cancellationToken));
+    }
+
+    [HttpGet("postgres/schema")]
+    [ProducesResponseType(typeof(PostgresCatalogDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> PostgresSchema(CancellationToken cancellationToken)
+    {
+        return Ok(await catalog.ReadAsync(cancellationToken));
+    }
+
+    [HttpPost("postgres/query")]
+    [ProducesResponseType(typeof(SqlWorkbenchResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> RunPostgresQuery([FromBody] SqlWorkbenchRequest request, CancellationToken cancellationToken)
+    {
+        return Ok(await workbench.ExecuteAsync(request, cancellationToken));
     }
 
     [HttpPost("power")]

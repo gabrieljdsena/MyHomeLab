@@ -35,3 +35,12 @@ public record TerminalPtyConfig(
     int MaxSessions,
     int IdleTimeoutSeconds,
     int MaxLifetimeSeconds);
+
+public record TerminalSessionSummary(
+    Guid Id,
+    string Shell,
+    string WorkingDirectory,
+    DateTime StartedAtUtc,
+    DateTime LastActivityUtc,
+    int AttachedClients,
+    bool Running);

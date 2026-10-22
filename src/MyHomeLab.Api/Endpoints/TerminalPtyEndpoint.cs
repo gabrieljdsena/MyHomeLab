@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Domain;
 
@@ -15,6 +16,7 @@ public static class TerminalPtyEndpoint
         app.MapGet("/api/terminal/ws", async (
             HttpContext context,
             ITerminalPtyService pty,
+            IConfiguration configuration,
             ILoggerFactory loggerFactory,
             CancellationToken requestAborted) =>
         {
@@ -27,26 +29,57 @@ public static class TerminalPtyEndpoint
                 return;
             }
 
+            if (!OriginPolicy.IsAllowed(context, configuration))
+            {
+                logger.LogWarning(
+                    "Rejected cross-site terminal WebSocket handshake from origin '{Origin}'",
+                    context.Request.Headers.Origin.ToString());
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsync("Cross-site WebSocket handshake rejected.", requestAborted);
+                return;
+            }
+
             var query = context.Request.Query;
             var shell = query["shell"].FirstOrDefault();
             var cwd = query["cwd"].FirstOrDefault();
+            var sessionParam = query["session"].FirstOrDefault();
             var cols = ParseSize(query["cols"].FirstOrDefault(), 120, 20, 500);
             var rows = ParseSize(query["rows"].FirstOrDefault(), 30, 5, 200);
 
+            Guid? requestedSession = null;
             ITerminalPtySession? session = null;
             string? rejection = null;
-            try
+
+            if (!string.IsNullOrWhiteSpace(sessionParam))
             {
-                session = await pty.CreateSessionAsync(shell, cwd, cols, rows, requestAborted);
+                if (!Guid.TryParse(sessionParam, out var parsed))
+                {
+                    rejection = "Invalid terminal session id.";
+                }
+                else if (pty.TryGetSession(parsed, out session))
+                {
+                    requestedSession = parsed;
+                }
+                else
+                {
+                    rejection = "This terminal session no longer exists. Start a new one.";
+                }
             }
-            catch (DomainException ex)
+            else
             {
-                rejection = ex.Message;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Terminal PTY session creation failed unexpectedly.");
-                rejection = "Failed to start terminal session.";
+                try
+                {
+                    session = await pty.CreateSessionAsync(shell, cwd, cols, rows, requestAborted);
+                }
+                catch (DomainException ex)
+                {
+                    rejection = ex.Message;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Terminal PTY session creation failed unexpectedly.");
+                    rejection = "Failed to start terminal session.";
+                }
             }
 
             if (session is null)
@@ -58,25 +91,26 @@ public static class TerminalPtyEndpoint
                 return;
             }
 
-            await using (session)
+            WebSocket ws;
+            try
             {
-                WebSocket ws;
-                try
-                {
-                    ws = await context.WebSockets.AcceptWebSocketAsync();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Terminal PTY WebSocket accept failed.");
-                    return;
-                }
-
-                using (ws)
-                {
-                    await BridgeAsync(ws, session, logger, requestAborted);
-                }
+                ws = await context.WebSockets.AcceptWebSocketAsync();
             }
-        });
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Terminal PTY WebSocket accept failed.");
+                return;
+            }
+
+            using (ws)
+            {
+                await SendFrameAsync(
+                    ws,
+                    new { type = "attached", session = session.Id, reattached = requestedSession is not null },
+                    CancellationToken.None);
+                await BridgeAsync(ws, session, logger, requestAborted);
+            }
+        }).RequireAuthorization();
     }
 
     private static async Task RejectAsync(
@@ -119,8 +153,9 @@ public static class TerminalPtyEndpoint
         CancellationToken requestAborted)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(requestAborted);
+        await using var attachment = session.Attach();
         var receiveTask = ReceiveLoopAsync(ws, session, cts);
-        var sendTask = SendLoopAsync(ws, session, logger, cts.Token);
+        var sendTask = SendLoopAsync(ws, attachment, session, logger, cts.Token);
 
         await Task.WhenAny(receiveTask, sendTask);
         cts.Cancel();
@@ -257,6 +292,7 @@ public static class TerminalPtyEndpoint
 
     private static async Task SendLoopAsync(
         WebSocket ws,
+        ITerminalPtyAttachment attachment,
         ITerminalPtySession session,
         ILogger logger,
         CancellationToken cancellationToken)
@@ -265,7 +301,7 @@ public static class TerminalPtyEndpoint
         {
             while (true)
             {
-                var chunk = await session.ReadOutputAsync(cancellationToken);
+                var chunk = await attachment.ReadOutputAsync(cancellationToken);
                 if (chunk is null)
                 {
                     break;

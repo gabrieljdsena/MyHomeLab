@@ -1,6 +1,7 @@
 using Serilog;
 using Serilog.Events;
 using Microsoft.AspNetCore.Http.Features;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Api.Endpoints;
 using MyHomeLab.Api.Middleware;
 using MyHomeLab.Api.Services;
@@ -53,9 +54,12 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 builder.Services.AddMyHomeLabInfrastructure(builder.Configuration);
+builder.Services.AddMyHomeLabAuth(builder.Configuration);
 builder.Services.AddScoped<AppService>();
 builder.Services.AddScoped<MachineService>();
 builder.Services.AddScoped<LogService>();
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<SqlWorkbenchService>();
 builder.Services.AddSingleton<SystemMetricsService>();
 builder.Services.AddSingleton<SystemSensorService>();
 builder.Services.AddSingleton<StorageSmartService>();
@@ -93,15 +97,19 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
-app.UseSwagger();
+// The spec is an endpoint (not middleware) so the global auth policy covers it.
+// The UI shell stays public; it renders nothing useful without the spec.
+app.MapSwagger().RequireAuthorization();
 app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyHomeLab API v1"));
 app.UseCors("dev");
 app.UseWebSockets();
 app.UseStaticFiles();
 
+app.UseMyHomeLabAuth();
+
 app.MapControllers();
 app.MapTerminalPty();
-app.MapFallbackToFile("index.html");
+app.MapFallbackToFile("index.html").AllowAnonymous();
 
 TryLogStartupUrls(app);
 TryLogToolchain(app);

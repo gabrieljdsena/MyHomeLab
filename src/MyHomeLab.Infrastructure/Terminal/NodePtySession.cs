@@ -8,20 +8,49 @@ namespace MyHomeLab.Infrastructure.Terminal;
 
 public sealed class NodePtySession : ITerminalPtySession
 {
+    private const int MaxReplayChars = 512 * 1024;
+    private const int SubscriberQueueCapacity = 1024;
+
     private readonly Process process;
-    private readonly Channel<string> channel = Channel.CreateBounded<string>(
-        new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest });
+    private readonly object gate = new();
+    private readonly List<Channel<string>> subscribers = [];
+    private readonly Queue<string> replayBuffer = new();
     private readonly CancellationTokenSource pumpCts = new();
     private readonly Task pumpTask;
     private readonly Task watchTask;
     private readonly Timer watchdog;
     private readonly TimeSpan idleTimeout;
-    private readonly DateTime startedAtUtc = DateTime.UtcNow;
     private readonly TimeSpan maxLifetime;
+    private readonly DateTime startedAtUtc = DateTime.UtcNow;
     private long lastActivityTicks = DateTime.UtcNow.Ticks;
+    private int replayChars;
+    private int ended;
     private int disposed;
 
+    public event Action<Guid>? Ended;
+
     public Guid Id { get; } = Guid.NewGuid();
+
+    public string Shell { get; }
+
+    public string WorkingDirectory { get; }
+
+    public DateTime StartedAtUtc => startedAtUtc;
+
+    public DateTime LastActivityUtc => new(Interlocked.Read(ref lastActivityTicks), DateTimeKind.Utc);
+
+    public int AttachedClients
+    {
+        get
+        {
+            lock (gate)
+            {
+                return subscribers.Count;
+            }
+        }
+    }
+
+    public bool HasEnded => Volatile.Read(ref ended) != 0;
 
     private int? processExitCode;
 
@@ -33,10 +62,14 @@ public sealed class NodePtySession : ITerminalPtySession
 
     private NodePtySession(
         Process process,
+        string shell,
+        string workingDirectory,
         TimeSpan idleTimeout,
         TimeSpan maxLifetime)
     {
         this.process = process;
+        this.Shell = shell;
+        this.WorkingDirectory = workingDirectory;
         this.idleTimeout = idleTimeout;
         this.maxLifetime = maxLifetime;
         pumpTask = PumpAsync(pumpCts.Token);
@@ -102,23 +135,34 @@ public sealed class NodePtySession : ITerminalPtySession
             throw new InvalidOperationException("Failed to start PTY bridge process.");
         }
 
-        return new NodePtySession(child, idleTimeout, maxLifetime);
+        return new NodePtySession(child, commandLineShell, workingDirectory, idleTimeout, maxLifetime);
     }
 
-    public async Task<string?> ReadOutputAsync(CancellationToken cancellationToken)
+    public ITerminalPtyAttachment Attach()
     {
-        try
+        var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(SubscriberQueueCapacity)
         {
-            return await channel.Reader.ReadAsync(cancellationToken);
-        }
-        catch (ChannelClosedException)
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+        lock (gate)
         {
-            return null;
+            foreach (var chunk in replayBuffer)
+            {
+                channel.Writer.TryWrite(chunk);
+            }
+
+            if (ended != 0)
+            {
+                channel.Writer.TryComplete();
+            }
+            else
+            {
+                subscribers.Add(channel);
+            }
         }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
+
+        return new Attachment(this, channel);
     }
 
     public async Task WriteInputAsync(string data, CancellationToken cancellationToken)
@@ -173,6 +217,11 @@ public sealed class NodePtySession : ITerminalPtySession
         Touch();
     }
 
+    public void MarkEndReason(string reason)
+    {
+        EndReason ??= reason;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
@@ -198,18 +247,16 @@ public sealed class NodePtySession : ITerminalPtySession
             // ignore
         }
 
-        channel.Writer.TryComplete();
-
-        try
+        if (!process.HasExited)
         {
-            if (!process.HasExited)
+            try
             {
                 process.Kill(entireProcessTree: true);
             }
-        }
-        catch
-        {
-            // ignore
+            catch
+            {
+                // ignore
+            }
         }
 
         try
@@ -220,6 +267,8 @@ public sealed class NodePtySession : ITerminalPtySession
         {
             // ignore
         }
+
+        End();
 
         try
         {
@@ -232,6 +281,52 @@ public sealed class NodePtySession : ITerminalPtySession
 
         pumpCts.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void Detach(Channel<string> channel)
+    {
+        lock (gate)
+        {
+            subscribers.Remove(channel);
+        }
+    }
+
+    private void Publish(string chunk)
+    {
+        lock (gate)
+        {
+            replayBuffer.Enqueue(chunk);
+            replayChars += chunk.Length;
+            while (replayChars > MaxReplayChars && replayBuffer.Count > 1)
+            {
+                replayChars -= replayBuffer.Dequeue().Length;
+            }
+
+            foreach (var subscriber in subscribers)
+            {
+                subscriber.Writer.TryWrite(chunk);
+            }
+        }
+    }
+
+    private void End()
+    {
+        if (Interlocked.Exchange(ref ended, 1) != 0)
+        {
+            return;
+        }
+
+        lock (gate)
+        {
+            foreach (var subscriber in subscribers)
+            {
+                subscriber.Writer.TryComplete();
+            }
+
+            subscribers.Clear();
+        }
+
+        Ended?.Invoke(Id);
     }
 
     private async Task PumpAsync(CancellationToken cancellationToken)
@@ -261,7 +356,7 @@ public sealed class NodePtySession : ITerminalPtySession
 
                 if (frame.Output is not null)
                 {
-                    await channel.Writer.WriteAsync(frame.Output, cancellationToken);
+                    Publish(frame.Output);
                 }
             }
         }
@@ -279,11 +374,11 @@ public sealed class NodePtySession : ITerminalPtySession
         }
         catch (Exception)
         {
-            // Never fail unpaired; exit path completes the channel.
+            // Never fail unpaired; the exit path publishes end of stream.
         }
         finally
         {
-            channel.Writer.TryComplete();
+            End();
         }
     }
 
@@ -309,7 +404,7 @@ public sealed class NodePtySession : ITerminalPtySession
                 // ignore
             }
 
-            channel.Writer.TryComplete();
+            End();
         }
     }
 
@@ -319,12 +414,12 @@ public sealed class NodePtySession : ITerminalPtySession
         var idle = now - new DateTime(Interlocked.Read(ref lastActivityTicks), DateTimeKind.Utc);
         if (idle >= idleTimeout)
         {
-            EndReason = $"Session closed after {idleTimeout.TotalMinutes:F0} minutes idle.";
+            MarkEndReason($"Session closed after {idleTimeout.TotalMinutes:F0} minutes idle.");
             _ = DisposeAsync();
         }
         else if (now - startedAtUtc >= maxLifetime)
         {
-            EndReason = $"Session closed after exceeding the {maxLifetime.TotalMinutes:F0} minute lifetime.";
+            MarkEndReason($"Session closed after exceeding the {maxLifetime.TotalMinutes:F0} minute lifetime.");
             _ = DisposeAsync();
         }
     }
@@ -355,6 +450,37 @@ public sealed class NodePtySession : ITerminalPtySession
         catch (Exception)
         {
             // Drain is best effort only.
+        }
+    }
+
+    private sealed class Attachment(NodePtySession session, Channel<string> channel) : ITerminalPtyAttachment
+    {
+        private int disposed;
+
+        public async Task<string?> ReadOutputAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await channel.Reader.ReadAsync(cancellationToken);
+            }
+            catch (ChannelClosedException)
+            {
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+            {
+                session.Detach(channel);
+            }
+
+            return ValueTask.CompletedTask;
         }
     }
 

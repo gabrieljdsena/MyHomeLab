@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
-import { Icon } from './Icon'
+import { Icon, Spinner } from './Icon'
 import { ConfirmDialog } from './ConfirmDialog'
 import { powerOff, reboot } from '../api/system'
+import { useLogout, useMe } from '../features/auth/useAuth'
+
+const TerminalWorkspace = lazy(() =>
+  import('../features/terminal/TerminalWorkspace').then((m) => ({ default: m.TerminalWorkspace })),
+)
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   `inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
@@ -16,12 +21,25 @@ const navClassMobile = ({ isActive }: { isActive: boolean }) =>
   }`
 
 export function Layout() {
+  const { pathname } = useLocation()
+  const onTerminal = pathname === '/terminal'
+  const [terminalMounted, setTerminalMounted] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [powerOpen, setPowerOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'shutdown' | 'reboot' | null>(null)
   const powerRef = useRef<HTMLDivElement>(null)
   const mobilePanelRef = useRef<HTMLDivElement>(null)
   const mobileButtonRef = useRef<HTMLDivElement>(null)
+  const me = useMe(true)
+  const logoutMutation = useLogout()
+
+  // Mount the terminal workspace on first visit, then keep it alive (hidden)
+  // so shells and WebSockets survive navigation between pages.
+  if (onTerminal && !terminalMounted) setTerminalMounted(true)
+
+  useEffect(() => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+  }, [pathname])
 
   const powerMutation = useMutation({
     mutationFn: (action: 'shutdown' | 'reboot') => (action === 'shutdown' ? powerOff() : reboot()),
@@ -137,6 +155,17 @@ export function Layout() {
                 </div>
               )}
             </div>
+            <span className="mx-1 h-6 w-px bg-border/60" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => logoutMutation.mutate()}
+              disabled={logoutMutation.isPending}
+              title={me.data ? `Signed in as ${me.data.username}` : 'Sign out'}
+              className="inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-text disabled:cursor-default disabled:opacity-60"
+            >
+              <Icon name="logout" className="text-[18px]" />
+              Sign out
+            </button>
           </nav>
 
           <div ref={mobileButtonRef} className="flex items-center md:hidden">
@@ -214,13 +243,41 @@ export function Layout() {
                 <Icon name="restart_alt" className="text-[18px] text-accent" />
                 Restart
               </button>
+
+              <div className="my-2 h-px bg-border/60" aria-hidden="true" />
+
+              <button
+                type="button"
+                onClick={() => {
+                  logoutMutation.mutate()
+                  setMobileOpen(false)
+                }}
+                disabled={logoutMutation.isPending}
+                className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-text disabled:cursor-default disabled:opacity-60"
+              >
+                <Icon name="logout" className="text-[18px]" />
+                {me.data ? `Sign out (${me.data.username})` : 'Sign out'}
+              </button>
             </nav>
           </div>
         )}
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 md:px-5 md:py-8">
-        <Outlet />
+        {terminalMounted && (
+          <div className={onTerminal ? '' : 'hidden'}>
+            <Suspense
+              fallback={
+                <div className="flex h-64 items-center justify-center">
+                  <Spinner />
+                </div>
+              }
+            >
+              <TerminalWorkspace visible={onTerminal} />
+            </Suspense>
+          </div>
+        )}
+        {!onTerminal && <Outlet />}
       </main>
 
       <footer className="border-t border-border/60 py-4 text-center text-xs text-muted/70">

@@ -21,6 +21,20 @@ if ($wasRunning) {
     }
 }
 
+# Every build ships auth now; the service refuses to start without a signing
+# secret, so guarantee it before we stop/swap/start anything.
+if (-not [Environment]::GetEnvironmentVariable('Auth__JwtSecret', 'Machine')) {
+    try {
+        $bytes = New-Object byte[] 32
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        [Environment]::SetEnvironmentVariable('Auth__JwtSecret', [Convert]::ToBase64String($bytes), 'Machine')
+        Write-Host '[build] generated JWT signing secret (machine env Auth__JwtSecret)'
+    }
+    catch {
+        Write-Host '[warn] could not set machine env Auth__JwtSecret - run elevated or the service will fail to start'
+    }
+}
+
 Write-Host "[build] frontend (npm run build)"
 Push-Location "$root\frontend"
 & "$root\frontend\node_modules\.bin\oxlint.cmd" 2>$null
@@ -64,4 +78,4 @@ if ($wasRunning -and -not $NoRestart) {
 
 Write-Host "[build] done."
 Write-Host "  Run: dotnet $publishDir\MyHomeLab.Api.dll"
-Write-Host "  (set ASPNETCORE_Kestrel__Certificates__Default__Path/Password when serving :443)"
+Write-Host "  (set ASPNETCORE_Kestrel__Certificates__Default__Path/Password and Auth__JwtSecret when serving :443)"

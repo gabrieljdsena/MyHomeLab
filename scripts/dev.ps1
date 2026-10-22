@@ -11,6 +11,18 @@ dotnet dev-certs https --trust 2>$null | Out-Null
 $env:ASPNETCORE_ENVIRONMENT = 'Development'
 Remove-Item Env:ASPNETCORE_URLS -ErrorAction SilentlyContinue
 
+# Stable JWT signing key so dev sessions survive API restarts.
+$secretDir = Join-Path $env:LOCALAPPDATA 'MyHomeLab'
+$secretFile = Join-Path $secretDir 'auth.jwt-secret'
+if (-not (Test-Path $secretFile)) {
+    New-Item -ItemType Directory -Path $secretDir -Force | Out-Null
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    Set-Content -Path $secretFile -Value ([Convert]::ToBase64String($bytes)) -NoNewline
+    Write-Host "[dev] generated JWT signing secret at $secretFile"
+}
+$env:Auth__JwtSecret = Get-Content $secretFile -Raw
+
 Write-Host "[dev] starting API on :8080 and :443 ..."
 $api = Start-Process dotnet -ArgumentList @('run', '--project', "$root\src\MyHomeLab.Api") `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru

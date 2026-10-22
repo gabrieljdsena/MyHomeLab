@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MyHomeLab.Application.Abstractions;
+using MyHomeLab.Infrastructure.Auth;
 using MyHomeLab.Infrastructure.Deploy;
 using MyHomeLab.Infrastructure.Docker;
 using MyHomeLab.Infrastructure.FileServer;
@@ -43,6 +44,18 @@ public static class DependencyInjection
         services.Configure<DockerOptions>(configuration.GetSection("Docker"));
         services.Configure<DeployOptions>(configuration.GetSection("Deploy"));
         services.Configure<WindowsLanOptions>(configuration.GetSection("Machines"));
+        services.Configure<PostgresWorkbenchOptions>(configuration.GetSection("PostgresWorkbench"));
+
+        var authOptions = AuthOptions.Load(configuration);
+        services.AddSingleton(authOptions);
+        services.AddSingleton(new AuthPolicy(
+            TimeSpan.FromDays(authOptions.SessionDays),
+            TimeSpan.FromMinutes(authOptions.TouchIntervalMinutes),
+            TimeSpan.FromHours(authOptions.ReissueAfterHours)));
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
+        services.AddSingleton<IAuthTokenService, JwtTokenService>();
+        services.AddSingleton<IAuthRepository, DapperAuthRepository>();
         services.AddHttpClient("health")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
@@ -50,6 +63,7 @@ public static class DependencyInjection
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
             });
         services.AddSingleton(dataSource);
+        services.AddSingleton(new NpgsqlConnectionSource(connectionString));
         services.AddSingleton<IMigrationRunner, SqlMigrationRunner>();
         services.AddSingleton<IAppRepository, DapperAppRepository>();
         services.AddSingleton<IHealthHistoryRepository, DapperHealthHistoryRepository>();
@@ -66,6 +80,8 @@ public static class DependencyInjection
         services.AddSingleton<IMachineReachabilityProbe, WindowsLanReachabilityProbe>();
         services.AddSingleton<ILanDiscoveryService, LanDiscoveryService>();
         services.AddSingleton<IPostgresMetricsReader, DapperPostgresMetricsReader>();
+        services.AddSingleton<ISqlExecutor, NpgsqlSqlExecutor>();
+        services.AddSingleton<IPostgresCatalogReader, NpgsqlPostgresCatalogReader>();
 
         return services;
     }

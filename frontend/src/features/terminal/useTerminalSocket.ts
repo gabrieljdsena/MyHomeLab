@@ -9,28 +9,40 @@ export interface PtyExitInfo {
 
 interface UseTerminalSocketOptions {
   shell: string
+  sessionId?: string
   onOutput: (data: string) => void
   onExit: (info: PtyExitInfo) => void
+  onAttached?: (sessionId: string) => void
   onErrorMessage: (message: string) => void
 }
 
-export function buildPtyUrl(shell: string, cols: number, rows: number): string {
+export function buildPtyUrl(shell: string, cols: number, rows: number, sessionId?: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const params = new URLSearchParams({
     shell,
     cols: String(Math.round(cols)),
     rows: String(Math.round(rows)),
   })
+  if (sessionId) {
+    params.set('session', sessionId)
+  }
   return `${protocol}//${window.location.host}/api/terminal/ws?${params}`
 }
 
-export function useTerminalSocket({ shell, onOutput, onExit, onErrorMessage }: UseTerminalSocketOptions) {
+export function useTerminalSocket({
+  shell,
+  sessionId,
+  onOutput,
+  onExit,
+  onAttached,
+  onErrorMessage,
+}: UseTerminalSocketOptions) {
   const [status, setStatus] = useState<PtyStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
-  const handlersRef = useRef({ onOutput, onExit, onErrorMessage })
+  const handlersRef = useRef({ sessionId, onOutput, onExit, onAttached, onErrorMessage })
   useEffect(() => {
-    handlersRef.current = { onOutput, onExit, onErrorMessage }
+    handlersRef.current = { sessionId, onOutput, onExit, onAttached, onErrorMessage }
   })
 
   const closeSocket = useCallback(() => {
@@ -53,7 +65,7 @@ export function useTerminalSocket({ shell, onOutput, onExit, onErrorMessage }: U
 
       let ws: WebSocket
       try {
-        ws = new WebSocket(buildPtyUrl(shell, cols, rows))
+        ws = new WebSocket(buildPtyUrl(shell, cols, rows, handlersRef.current.sessionId))
       } catch (err) {
         setStatus('error')
         setError(err instanceof Error ? err.message : 'Failed to open terminal connection.')
@@ -72,7 +84,7 @@ export function useTerminalSocket({ shell, onOutput, onExit, onErrorMessage }: U
         if (wsRef.current !== ws) return
         if (typeof event.data !== 'string') return
 
-        let frame: { type?: string; data?: string; code?: number; message?: string }
+        let frame: { type?: string; data?: string; code?: number; message?: string; session?: string }
         try {
           frame = JSON.parse(event.data) as typeof frame
         } catch {
@@ -81,6 +93,8 @@ export function useTerminalSocket({ shell, onOutput, onExit, onErrorMessage }: U
 
         if (frame.type === 'output' && typeof frame.data === 'string') {
           handlersRef.current.onOutput(frame.data)
+        } else if (frame.type === 'attached' && typeof frame.session === 'string') {
+          handlersRef.current.onAttached?.(frame.session)
         } else if (frame.type === 'exit') {
           handlersRef.current.onExit({ code: typeof frame.code === 'number' ? frame.code : null })
         } else if (frame.type === 'error' && typeof frame.message === 'string') {

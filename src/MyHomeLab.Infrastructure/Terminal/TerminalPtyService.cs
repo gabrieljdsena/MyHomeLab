@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MyHomeLab.Application.Abstractions;
@@ -9,9 +10,10 @@ namespace MyHomeLab.Infrastructure.Terminal;
 public sealed class TerminalPtyService(
     IOptions<TerminalOptions> options,
     IToolchainService toolchain,
-    ILogger<TerminalPtyService> logger) : ITerminalPtyService
+    ILogger<TerminalPtyService> logger) : ITerminalPtyService, IAsyncDisposable
 {
     private readonly TerminalOptions config = options.Value;
+    private readonly ConcurrentDictionary<Guid, ITerminalPtySession> sessions = new();
     private int activeSessions;
 
     public TerminalPtyConfig GetPtyConfig()
@@ -94,15 +96,79 @@ public sealed class TerminalPtyService(
             throw new DomainException($"Failed to start terminal session: {ex.Message}");
         }
 
+        var counting = new CountingSession(session);
+        sessions[counting.Id] = counting;
+        counting.Ended += OnSessionClosed;
+        if (session.HasEnded)
+        {
+            OnSessionClosed(counting.Id);
+        }
+
         logger.LogInformation(
             "Terminal PTY session started id={Id} shell={Shell} cwd={Cwd}",
             session.Id, resolvedShell, directory);
 
-        return Task.FromResult<ITerminalPtySession>(new CountingSession(session, OnSessionClosed));
+        return Task.FromResult<ITerminalPtySession>(counting);
+    }
+
+    public bool TryGetSession(Guid id, out ITerminalPtySession session)
+    {
+        var found = sessions.TryGetValue(id, out var existing);
+        session = existing!;
+        return found;
+    }
+
+    public IReadOnlyList<TerminalSessionSummary> ListSessions()
+    {
+        return sessions.Values
+            .Select(session => new TerminalSessionSummary(
+                session.Id,
+                session.Shell,
+                session.WorkingDirectory,
+                session.StartedAtUtc,
+                session.LastActivityUtc,
+                session.AttachedClients,
+                session.ExitCode is null))
+            .OrderBy(summary => summary.StartedAtUtc)
+            .ToList();
+    }
+
+    public async Task<bool> KillSessionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        if (!sessions.TryGetValue(id, out var session))
+        {
+            return false;
+        }
+
+        session.MarkEndReason("Session killed by user.");
+        await session.DisposeAsync();
+        return true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var remaining = sessions.Values.ToArray();
+        sessions.Clear();
+        foreach (var session in remaining)
+        {
+            try
+            {
+                await session.DisposeAsync();
+            }
+            catch
+            {
+                // Shutdown is best effort.
+            }
+        }
     }
 
     private void OnSessionClosed(Guid id)
     {
+        if (!sessions.TryRemove(id, out _))
+        {
+            return;
+        }
+
         Interlocked.Decrement(ref activeSessions);
         logger.LogInformation("Terminal PTY session closed id={Id}", id);
     }
@@ -188,31 +254,39 @@ public sealed class TerminalPtyService(
         return Directory.GetCurrentDirectory();
     }
 
-    private sealed class CountingSession(NodePtySession inner, Action<Guid> onClosed) : ITerminalPtySession
+    private sealed class CountingSession(NodePtySession inner) : ITerminalPtySession
     {
-        private int closed;
+        public event Action<Guid>? Ended
+        {
+            add => inner.Ended += value;
+            remove => inner.Ended -= value;
+        }
 
         public Guid Id => inner.Id;
+
+        public string Shell => inner.Shell;
+
+        public string WorkingDirectory => inner.WorkingDirectory;
+
+        public DateTime StartedAtUtc => inner.StartedAtUtc;
+
+        public DateTime LastActivityUtc => inner.LastActivityUtc;
+
+        public int AttachedClients => inner.AttachedClients;
 
         public int? ExitCode => inner.ExitCode;
 
         public string? EndReason => inner.EndReason;
 
-        public Task<string?> ReadOutputAsync(CancellationToken cancellationToken) =>
-            inner.ReadOutputAsync(cancellationToken);
+        public void MarkEndReason(string reason) => inner.MarkEndReason(reason);
 
         public Task WriteInputAsync(string data, CancellationToken cancellationToken) =>
             inner.WriteInputAsync(data, cancellationToken);
 
         public void Resize(int cols, int rows) => inner.Resize(cols, rows);
 
-        public async ValueTask DisposeAsync()
-        {
-            await inner.DisposeAsync();
-            if (Interlocked.Exchange(ref closed, 1) == 0)
-            {
-                onClosed(inner.Id);
-            }
-        }
+        public ITerminalPtyAttachment Attach() => inner.Attach();
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }

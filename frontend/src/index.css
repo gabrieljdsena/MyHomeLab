@@ -85,3 +85,10 @@ body {
   --plyr-menu-color: var(--color-text);
   --plyr-menu-border-color: var(--color-border);
 }
+
+/* xterm's stylesheet gives the viewport an opaque #000 background and the
+   theme paints it again, which would hide the wallpaper tint layer behind
+   the terminal. Keep that layer transparent when wallpaper is active. */
+.xterm-transparent .xterm-viewport {
+  background-color: transparent !important;
+}
