@@ -3,6 +3,7 @@ import { Layout } from './components/Layout'
 import { AuthGate } from './features/auth/AuthGate'
 import { LoginPage } from './features/auth/LoginPage'
 import { SetupPage } from './features/auth/SetupPage'
+import { ApiKeys } from './pages/ApiKeys'
 import { Dashboard } from './pages/Dashboard'
 import { Files } from './pages/Files'
 import { Logs } from './pages/Logs'
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/files" element={<Files />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/postgres" element={<Postgres />} />
+          <Route path="/api-keys" element={<ApiKeys />} />
           {/* Rendered by Layout's keep-alive workspace, not by the outlet. */}
           <Route path="/terminal" />
         </Route>

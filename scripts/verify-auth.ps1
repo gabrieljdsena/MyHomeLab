@@ -6,7 +6,9 @@
 param(
     [string]$BaseUrl = 'https://localhost',
     [string]$Username,
-    [string]$Password
+    [string]$Password,
+    [string]$ApiToken,
+    [string]$ActionToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,7 +33,8 @@ function Invoke-Probe {
     param(
         [string]$Method,
         [string]$Path,
-        [Microsoft.PowerShell.Commands.WebRequestSession]$Session
+        [Microsoft.PowerShell.Commands.WebRequestSession]$Session,
+        [hashtable]$Headers
     )
     $arguments = @{
         Method          = $Method
@@ -41,6 +44,7 @@ function Invoke-Probe {
         ErrorAction     = 'Stop'
     }
     if ($Session) { $arguments.WebSession = $Session }
+    if ($Headers) { $arguments.Headers = $Headers }
 
     try {
         $response = Invoke-WebRequest @arguments
@@ -135,6 +139,7 @@ $protected = @(
     @{ Method = 'GET';  Path = '/api/docker/containers' },
     @{ Method = 'GET';  Path = '/api/terminal/config' },
     @{ Method = 'GET';  Path = '/api/terminal/ws' },
+    @{ Method = 'GET';  Path = '/api/api-keys' },
     @{ Method = 'GET';  Path = '/api/auth/me' },
     @{ Method = 'POST'; Path = '/api/auth/logout' },
     @{ Method = 'POST'; Path = '/api/auth/logout-all' },
@@ -157,6 +162,45 @@ if ($health.Status -eq 401) {
 }
 else {
     Write-Host "[info] GET /api/healthz is anonymous ($($health.Status))."
+}
+
+# --- optional read-only API token flow ----------------------------------------
+
+if ($ApiToken) {
+    $tokenHeaders = @{ 'X-Api-Key' = $ApiToken }
+    foreach ($path in @('/api/apps', '/api/system', '/api/logs')) {
+        $result = Invoke-Probe -Method Get -Path $path -Headers $tokenHeaders
+        Assert-True ($result.Status -eq 200) "GET $path with API token -> 200 (got $($result.Status))"
+    }
+
+    $notAllowed = Invoke-Probe -Method Get -Path '/api/system/network' -Headers $tokenHeaders
+    Assert-True ($notAllowed.Status -eq 401) "GET /api/system/network is outside the token scope (got $($notAllowed.Status))"
+
+    $management = Invoke-Probe -Method Get -Path '/api/api-keys' -Headers $tokenHeaders
+    Assert-True ($management.Status -eq 401) "GET /api/api-keys rejects API tokens (got $($management.Status))"
+
+    $invalid = Invoke-Probe -Method Get -Path '/api/apps' -Headers @{ 'X-Api-Key' = 'mhl_invalid' }
+    Assert-True ($invalid.Status -eq 401) "GET /api/apps rejects an invalid API token (got $($invalid.Status))"
+}
+else {
+    Write-Host '[info] pass -ApiToken to verify the read-only API-token scope.'
+}
+
+# --- optional action-token authorization checks -------------------------------
+
+if ($ActionToken) {
+    # Random app ids keep these policy checks side-effect free: an authorized
+    # request reaches the controller and gets 404; a read-only key gets 401/403.
+    $actionHeaders = @{ 'X-Api-Key' = $ActionToken }
+    $missingId = [guid]::NewGuid().ToString()
+    $deploy = Invoke-Probe -Method Post -Path "/api/apps/$missingId/deploy" -Headers $actionHeaders
+    Assert-True ($deploy.Status -eq 404) "POST deploy with action token is authorized, then app-not-found (got $($deploy.Status))"
+
+    $restart = Invoke-Probe -Method Post -Path "/api/apps/$missingId/container/restart" -Headers $actionHeaders
+    Assert-True ($restart.Status -eq 404) "POST container restart with action token is authorized, then app-not-found (got $($restart.Status))"
+}
+else {
+    Write-Host '[info] pass -ActionToken to verify the redeploy/restart-key policy without triggering a real action.'
 }
 
 # --- optional full credential flow --------------------------------------------

@@ -56,6 +56,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IAuthTokenService, JwtTokenService>();
         services.AddSingleton<IAuthRepository, DapperAuthRepository>();
+        services.AddSingleton<IApiKeyRepository, DapperApiKeyRepository>();
         services.AddHttpClient("health")
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,6 +14,8 @@ namespace MyHomeLab.Api.Auth;
 public static class AuthSetup
 {
     public const string LoginRateLimitPolicy = "auth";
+    public const string ReadOnlyServicePolicy = "ReadOnlyService";
+    public const string HomelabActionsPolicy = "HomelabActions";
 
     public static IServiceCollection AddMyHomeLabAuth(this IServiceCollection services, IConfiguration configuration)
     {
@@ -61,6 +64,10 @@ public static class AuthSetup
                     OnChallenge = async context =>
                     {
                         context.HandleResponse();
+                        if (context.Response.HasStarted)
+                        {
+                            return;
+                        }
                         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                         context.Response.ContentType = "application/problem+json";
                         await context.Response.WriteAsync(JsonSerializer.Serialize(new ProblemDetails
@@ -72,10 +79,29 @@ public static class AuthSetup
                         }));
                     },
                 };
-            });
+            })
+            .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
+                ApiTokenAuthenticationHandler.SchemeName,
+                _ => { });
 
         services.AddAuthorizationBuilder()
-            .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+            .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
+            .AddPolicy(ReadOnlyServicePolicy, policy => policy
+                .AddAuthenticationSchemes(
+                    JwtBearerDefaults.AuthenticationScheme,
+                    ApiTokenAuthenticationHandler.SchemeName)
+                .RequireAuthenticatedUser())
+            .AddPolicy(HomelabActionsPolicy, policy => policy
+                .AddAuthenticationSchemes(
+                    JwtBearerDefaults.AuthenticationScheme,
+                    ApiTokenAuthenticationHandler.SchemeName)
+                .RequireAuthenticatedUser()
+                .RequireAssertion(context =>
+                    !string.Equals(
+                        context.User.Identity?.AuthenticationType,
+                        ApiTokenAuthenticationHandler.SchemeName,
+                        StringComparison.Ordinal)
+                    || context.User.HasClaim("scope", "homelab:write")));
 
         services.AddRateLimiter(limiter =>
         {

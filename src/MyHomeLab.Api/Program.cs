@@ -59,6 +59,7 @@ builder.Services.AddScoped<AppService>();
 builder.Services.AddScoped<MachineService>();
 builder.Services.AddScoped<LogService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<ApiKeyService>();
 builder.Services.AddScoped<SqlWorkbenchService>();
 builder.Services.AddSingleton<SystemMetricsService>();
 builder.Services.AddSingleton<SystemSensorService>();

@@ -286,7 +286,7 @@ GET    /api/system/network      -> NetworkSample[] (rolling ~5 min throughput hi
 GET    /api/system/postgres     -> PostgresMetrics (live vitals of the hub's own database)
 GET    /api/system/postgres/schema -> PostgresCatalog   (databases + their tables/views/matviews)
 POST   /api/system/postgres/query -> SqlWorkbenchResult (one DML statement; body {sql, database?} targets any database; 400 on DDL/multi-statement/Postgres errors)
-POST   /api/system/power        -> PowerResponse   (shutdown/reboot host, uses shutdown /s|/r /t 0 or shutdown -h|-r now)
+POST   /api/system/power        -> PowerResponse   (shutdown/reboot host; optional delaySeconds 0-300; uses shutdown /s|/r /t N or shutdown -h|-r now)
 GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
 GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd, pty flags)
@@ -314,6 +314,10 @@ POST   /api/auth/logout         -> 204            (revokes current session, clea
 POST   /api/auth/logout-all     -> 204            (revokes every session; 401 without a live one)
 GET    /api/auth/me             -> AuthUser       (current user, 401 when no session)
 POST   /api/auth/password       -> 204            (change own password; 400 wrong current, revokes all other sessions)
+GET    /api/api-keys            -> ApiKey[]       (session only; token hashes never returned)
+POST   /api/api-keys            -> {apiKey, token} (session only; full token shown once, never expires)
+PATCH  /api/api-keys/{id}       -> ApiKey          (session only; body {canWrite}; grant/remove action permission)
+DELETE /api/api-keys/{id}       -> 204            (session only; revokes the key permanently)
 GET    /swagger                 -> Swagger UI (the spec at /swagger/v1/swagger.json requires auth)
 ```
 
@@ -329,6 +333,15 @@ the JWT carries `sub`/`sid`/`iat`/`nbf`/`exp` and is only valid while its
 `auth_sessions` row exists. Non-GET requests with a cross-site `Origin`/`Referer`
 are rejected with 403; the interactive terminal WebSocket also checks the origin
 during the handshake.
+
+Integration keys are managed at `/api-keys` (UI) / `/api/api-keys` (session-only
+API). Create a key, copy the one-time token, and send it as `X-Api-Key`. Tokens
+are stored as SHA-256 hashes in `api_keys` and never expire. Read scope covers
+`GET /api/apps`, `GET /api/system` and `GET /api/logs`. Keys with
+`can_write=true` can additionally use `POST /api/apps/{id}/deploy`,
+`POST /api/apps/{id}/container/restart`, and `POST /api/system/power`; all other
+routes remain session-only. Revoke a key from the page to invalidate it
+immediately.
 
 `LogEntry`:
 ```json
@@ -772,7 +785,7 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
    3x exponential-backoff retry per chunk, byte-weighted progress across mixed small/large batches,
    best-effort abort on failure); smaller files keep the single-POST path. Session temp lives in
    `<root>/.upload-tmp/{uploadId}/`, hidden from listings and excluded from quota until completed.
-- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
+- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | API keys | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
 - **Auth** (`/login`, `/setup`): `AuthGate` wraps `Layout` — it resolves
   `GET /api/auth/status` + `GET /api/auth/me` first (spinner / retry card while

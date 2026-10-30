@@ -11,9 +11,11 @@ const TerminalWorkspace = lazy(() =>
 )
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
-  `inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+  `inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition 2xl:px-3 ${
     isActive ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-surface-2 hover:text-text'
   }`
+
+const navLabel = 'hidden xl:inline'
 
 const navClassMobile = ({ isActive }: { isActive: boolean }) =>
   `flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
@@ -80,34 +82,38 @@ export function Layout() {
             </div>
           </div>
 
-          <nav className="hidden items-center gap-1 md:flex">
-            <NavLink to="/" end className={navClass}>
+          <nav className="hidden items-center gap-0.5 md:flex xl:gap-1">
+            <NavLink to="/" end className={navClass} aria-label="Dashboard" title="Dashboard">
               <Icon name="dashboard" className="text-[18px]" />
-              Dashboard
+              <span className={navLabel}>Dashboard</span>
             </NavLink>
-            <NavLink to="/manage" className={navClass}>
+            <NavLink to="/manage" className={navClass} aria-label="Manage" title="Manage">
               <Icon name="tune" className="text-[18px]" />
-              Manage
+              <span className={navLabel}>Manage</span>
             </NavLink>
-            <NavLink to="/machines" className={navClass}>
+            <NavLink to="/machines" className={navClass} aria-label="Machines" title="Machines">
               <Icon name="devices" className="text-[18px]" />
-              Machines
+              <span className={navLabel}>Machines</span>
             </NavLink>
-            <NavLink to="/files" className={navClass}>
+            <NavLink to="/files" className={navClass} aria-label="Files" title="Files">
               <Icon name="folder" className="text-[18px]" />
-              Files
+              <span className={navLabel}>Files</span>
             </NavLink>
-            <NavLink to="/logs" className={navClass}>
+            <NavLink to="/logs" className={navClass} aria-label="Logs" title="Logs">
               <Icon name="article" className="text-[18px]" />
-              Logs
+              <span className={navLabel}>Logs</span>
             </NavLink>
-            <NavLink to="/postgres" className={navClass}>
+            <NavLink to="/postgres" className={navClass} aria-label="Postgres" title="Postgres">
               <Icon name="database" className="text-[18px]" />
-              Postgres
+              <span className={navLabel}>Postgres</span>
             </NavLink>
-            <NavLink to="/terminal" className={navClass}>
+            <NavLink to="/api-keys" className={navClass} aria-label="API keys" title="API keys">
+              <Icon name="key" className="text-[18px]" />
+              <span className={navLabel}>API keys</span>
+            </NavLink>
+            <NavLink to="/terminal" className={navClass} aria-label="Terminal" title="Terminal">
               <Icon name="terminal" className="text-[18px]" />
-              Terminal
+              <span className={navLabel}>Terminal</span>
             </NavLink>
             <span className="mx-1 h-6 w-px bg-border/60" aria-hidden="true" />
             <div className="relative" ref={powerRef}>
@@ -120,7 +126,7 @@ export function Layout() {
                 className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-down/30 bg-down/10 px-3 py-2 text-sm font-medium text-down transition hover:bg-down/20 hover:text-down"
               >
                 <Icon name="power_settings_new" className="text-[18px]" />
-                Power
+                <span className={navLabel}>Power</span>
                 <Icon name="expand_more" className={`text-[16px] transition ${powerOpen ? 'rotate-180' : ''}`} />
               </button>
               {powerOpen && (
@@ -164,7 +170,7 @@ export function Layout() {
               className="inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-text disabled:cursor-default disabled:opacity-60"
             >
               <Icon name="logout" className="text-[18px]" />
-              Sign out
+              <span className={navLabel}>Sign out</span>
             </button>
           </nav>
 
@@ -186,7 +192,7 @@ export function Layout() {
           <div
             id="mobile-nav"
             ref={mobilePanelRef}
-            className="border-t border-border/70 bg-surface/95 backdrop-blur md:hidden"
+            className="max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain border-t border-border/70 bg-surface/95 backdrop-blur md:hidden"
           >
             <nav className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-3">
               <NavLink to="/" end className={navClassMobile} onClick={() => setMobileOpen(false)}>
@@ -212,6 +218,10 @@ export function Layout() {
               <NavLink to="/postgres" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="database" className="text-[18px]" />
                 Postgres
+              </NavLink>
+              <NavLink to="/api-keys" className={navClassMobile} onClick={() => setMobileOpen(false)}>
+                <Icon name="key" className="text-[18px]" />
+                API keys
               </NavLink>
               <NavLink to="/terminal" className={navClassMobile} onClick={() => setMobileOpen(false)}>
                 <Icon name="terminal" className="text-[18px]" />

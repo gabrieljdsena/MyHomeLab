@@ -1,6 +1,7 @@
 export const queryKeys = {
   authStatus: ['auth', 'status'] as const,
   authMe: ['auth', 'me'] as const,
+  apiKeys: ['api-keys'] as const,
   apps: ['apps'] as const,
   app: (id: string) => ['apps', id] as const,
   categories: ['categories'] as const,

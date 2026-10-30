@@ -8,7 +8,7 @@ namespace MyHomeLab.Infrastructure.System;
 
 public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
 {
-    public async Task<PowerResponse> ExecuteAsync(string action, CancellationToken cancellationToken)
+    public async Task<PowerResponse> ExecuteAsync(string action, int? delaySeconds, CancellationToken cancellationToken)
     {
         var normalized = action?.Trim().ToLowerInvariant() ?? string.Empty;
         if (normalized is not ("shutdown" or "reboot" or "poweroff" or "restart"))
@@ -17,9 +17,10 @@ public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
         }
 
         var isShutdown = normalized is "shutdown" or "poweroff";
+        var delay = Math.Clamp(delaySeconds ?? 0, 0, 300);
         var requestedAt = DateTime.UtcNow;
 
-        var psi = BuildShutdownStartInfo(isShutdown);
+        var psi = BuildShutdownStartInfo(isShutdown, delay);
 
         logger.LogWarning("Power action requested: {Action} via {FileName} {Args}", normalized, psi.FileName, string.Join(" ", psi.ArgumentList));
 
@@ -41,7 +42,11 @@ public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
             catch (OperationCanceledException) when (cts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
                 // timed out waiting — likely shutdown is pending, accept as success
-                return new PowerResponse(normalized, true, requestedAt, "Shutdown scheduled.");
+                return new PowerResponse(
+                    normalized,
+                    true,
+                    requestedAt,
+                    $"{(isShutdown ? "Shutdown" : "Reboot")} scheduled{(delay > 0 ? $" in {delay}s" : "")}.");
             }
 
             if (process.ExitCode != 0)
@@ -51,7 +56,11 @@ public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
                 return new PowerResponse(normalized, false, requestedAt, detail);
             }
 
-            return new PowerResponse(normalized, true, requestedAt, isShutdown ? "Shutdown scheduled." : "Reboot scheduled.");
+            return new PowerResponse(
+                normalized,
+                true,
+                requestedAt,
+                $"{(isShutdown ? "Shutdown" : "Reboot")} scheduled{(delay > 0 ? $" in {delay}s" : "")}.");
         }
         catch (DomainException)
         {
@@ -64,7 +73,7 @@ public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
         }
     }
 
-    private static ProcessStartInfo BuildShutdownStartInfo(bool isShutdown)
+    private static ProcessStartInfo BuildShutdownStartInfo(bool isShutdown, int delaySeconds)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -75,7 +84,7 @@ public sealed class PowerService(ILogger<PowerService> logger) : IPowerService
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                ArgumentList = { isShutdown ? "/s" : "/r", "/t", "0" },
+                ArgumentList = { isShutdown ? "/s" : "/r", "/t", delaySeconds.ToString() },
             };
         }
 

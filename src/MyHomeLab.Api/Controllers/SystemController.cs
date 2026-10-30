@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
@@ -19,6 +21,7 @@ public sealed class SystemController(
     IPowerService power) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthSetup.ReadOnlyServicePolicy)]
     [ProducesResponseType(typeof(SystemMetricsDto), StatusCodes.Status200OK)]
     public IActionResult Get()
     {
@@ -76,11 +79,12 @@ public sealed class SystemController(
     }
 
     [HttpPost("power")]
+    [Authorize(Policy = AuthSetup.HomelabActionsPolicy)]
     [ProducesResponseType(typeof(PowerResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Power([FromBody] PowerRequest request, CancellationToken cancellationToken)
     {
-        var result = await power.ExecuteAsync(request.Action, cancellationToken);
+        var result = await power.ExecuteAsync(request.Action, request.DelaySeconds, cancellationToken);
         return Ok(result);
     }
 }

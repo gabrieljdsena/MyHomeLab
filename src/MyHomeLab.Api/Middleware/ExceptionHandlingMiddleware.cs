@@ -33,6 +33,10 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
         {
             await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found", ex.Message);
         }
+        catch (ApiKeyNotFoundException ex)
+        {
+            await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found", ex.Message);
+        }
         catch (SharedFileNotFoundException ex)
         {
             await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Not Found", ex.Message);
