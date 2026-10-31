@@ -1,7 +1,10 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Api.Services;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
+using MyHomeLab.Application.Services;
 
 namespace MyHomeLab.Api.Controllers;
 
@@ -13,9 +16,12 @@ public sealed class SystemController(
     StorageSmartService smart,
     NetworkThroughputService network,
     PostgresMetricsService postgres,
+    SqlWorkbenchService workbench,
+    IPostgresCatalogReader catalog,
     IPowerService power) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthSetup.ReadOnlyServicePolicy)]
     [ProducesResponseType(typeof(SystemMetricsDto), StatusCodes.Status200OK)]
     public IActionResult Get()
     {
@@ -57,12 +63,28 @@ public sealed class SystemController(
         return Ok(await postgres.GetMetricsAsync(cancellationToken));
     }
 
+    [HttpGet("postgres/schema")]
+    [ProducesResponseType(typeof(PostgresCatalogDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> PostgresSchema(CancellationToken cancellationToken)
+    {
+        return Ok(await catalog.ReadAsync(cancellationToken));
+    }
+
+    [HttpPost("postgres/query")]
+    [ProducesResponseType(typeof(SqlWorkbenchResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> RunPostgresQuery([FromBody] SqlWorkbenchRequest request, CancellationToken cancellationToken)
+    {
+        return Ok(await workbench.ExecuteAsync(request, cancellationToken));
+    }
+
     [HttpPost("power")]
+    [Authorize(Policy = AuthSetup.HomelabActionsPolicy)]
     [ProducesResponseType(typeof(PowerResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Power([FromBody] PowerRequest request, CancellationToken cancellationToken)
     {
-        var result = await power.ExecuteAsync(request.Action, cancellationToken);
+        var result = await power.ExecuteAsync(request.Action, request.DelaySeconds, cancellationToken);
         return Ok(result);
     }
 }

@@ -22,6 +22,15 @@ scripts/build.ps1       # production build (frontend -> API wwwroot -> single de
 scripts/install-service.ps1  # run as a Windows service (optional, reboot-safe)
 ```
 
+## API keys
+
+Open `/api-keys` while signed in to create or revoke long-lived keys for
+integrations. The full key is shown once; send it as `X-Api-Key`. Keys never
+expire. Read access covers `GET /api/apps`, `GET /api/system` and `GET /api/logs`;
+enable **Allow app actions** to also allow redeploying apps, restarting their
+containers, and rebooting or shutting down the host. Machine power always
+requires an explicit two-step confirmation from the assistant.
+
 ## Rules for AI / agents
 
 If you're an AI coding agent, read `AGENTS.md` first — it contains the codebase

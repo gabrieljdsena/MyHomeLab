@@ -10,6 +10,8 @@ export interface AppDetail {
   port: number | null
   tags: string[]
   dockerContainer: string | null
+  serviceName: string | null
+  buildScriptPath: string | null
   healthCheckEnabled: boolean
   healthCheckIntervalMs: number
   healthStatus: HealthStatus
@@ -30,6 +32,8 @@ export interface CreateAppInput {
   port: number | null
   tags: string[]
   dockerContainer: string | null
+  serviceName: string | null
+  buildScriptPath: string | null
   healthCheckEnabled: boolean
   healthCheckIntervalMs: number
   sortOrder: number
@@ -46,10 +50,24 @@ export interface PatchAppInput {
   port?: number
   tags?: string[]
   dockerContainer?: string | null
+  serviceName?: string | null
+  buildScriptPath?: string | null
   healthCheckEnabled?: boolean
   isEnabled?: boolean
   healthCheckIntervalMs?: number
   sortOrder?: number
+}
+
+export type DeployState = 'queued' | 'building' | 'restarting' | 'done' | 'failed'
+
+export interface DeployStatus {
+  appId: string
+  state: DeployState
+  message: string
+  exitCode: number | null
+  outputTail: string
+  startedAtUtc: string
+  updatedAtUtc: string
 }
 
 export interface DockerContainer {

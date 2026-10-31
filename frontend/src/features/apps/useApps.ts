@@ -3,6 +3,8 @@ import { queryKeys } from '../../lib/queryKeys'
 import {
   createApp,
   deleteApp,
+  deployApp,
+  getDeployStatus,
   listApps,
   listCategories,
   patchApp,
@@ -10,9 +12,12 @@ import {
   updateApp,
   type AppQuery,
 } from '../../api/apps'
-import type { CreateAppInput, PatchAppInput, UpdateAppInput } from '../../lib/types'
+import type { CreateAppInput, DeployState, PatchAppInput, UpdateAppInput } from '../../lib/types'
 
 const REFETCH_MS = 15_000
+const DEPLOY_POLL_MS = 3_000
+
+const ACTIVE_DEPLOY_STATES: DeployState[] = ['queued', 'building', 'restarting']
 
 export function useApps(query: AppQuery = {}) {
   return useQuery({
@@ -69,6 +74,30 @@ export function useProbeApp() {
     onSuccess: (_data, id) => {
       client.invalidateQueries({ queryKey: queryKeys.apps })
       client.invalidateQueries({ queryKey: ['apps', id, 'history'] })
+    },
+  })
+}
+
+export function useDeployStatus(appId: string) {
+  return useQuery({
+    queryKey: queryKeys.appDeploy(appId),
+    queryFn: () => getDeployStatus(appId),
+    refetchInterval: (query) => {
+      const state = query.state.data?.state
+      return state && ACTIVE_DEPLOY_STATES.includes(state) ? DEPLOY_POLL_MS : false
+    },
+    retry: 3,
+    retryDelay: 3_000,
+  })
+}
+
+export function useStartDeploy() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deployApp(id),
+    onSuccess: (status) => {
+      client.setQueryData(queryKeys.appDeploy(status.appId), status)
+      client.invalidateQueries({ queryKey: queryKeys.apps })
     },
   })
 }

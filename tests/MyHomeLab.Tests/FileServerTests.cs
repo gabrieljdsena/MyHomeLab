@@ -146,6 +146,31 @@ public class FileServerTests : IDisposable
         Assert.Throws<DomainException>(() => service.List(".."));
     }
 
+    [Fact]
+    public async Task Exists_Reflects_Files_And_Directories()
+    {
+        var service = CreateService(quotaMaxBytes: 1024 * 1024);
+        Assert.False(service.Exists(null, "a.txt"));
+
+        await service.SaveAsync(null, "a.txt", new MemoryStream("hi"u8.ToArray()), 2, false, CancellationToken.None);
+        service.CreateDirectory(null, "sub");
+
+        Assert.True(service.Exists(null, "a.txt"));
+        Assert.True(service.Exists(null, "sub"));
+        Assert.False(service.Exists(null, "missing.txt"));
+    }
+
+    [Fact]
+    public void EnsureQuotaAvailable_Rejects_Over_Budget_Batches()
+    {
+        var service = CreateService(quotaMaxBytes: 10);
+
+        service.EnsureQuotaAvailable(10);
+
+        var ex = Assert.Throws<DomainException>(() => service.EnsureQuotaAvailable(11));
+        Assert.Contains("quota", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private FileSystemFileService CreateService(long quotaMaxBytes)
     {
         var options = Options.Create(new FileServerOptions

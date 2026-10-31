@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
@@ -36,11 +37,7 @@
   </Target>
 
   <ItemGroup>
-    <Content Include="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\**\*"
-             Exclude="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\node_modules\.package-lock.json"
-             Link="pty-bridge\%(RecursiveDir)%(Filename)%(Extension)"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\**\*" Exclude="$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\node_modules\.package-lock.json" Link="pty-bridge\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="EnsurePtyBridgeDeps" BeforeTargets="BeforeBuild" Condition="!Exists('$(MSBuildThisFileDirectory)..\MyHomeLab.Infrastructure\Terminal\NodePty\pty-bridge\node_modules\node-pty')">

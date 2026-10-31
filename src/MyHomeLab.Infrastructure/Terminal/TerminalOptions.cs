@@ -18,7 +18,7 @@ public sealed class TerminalOptions
 
     public int PtyMaxSessions { get; set; } = 4;
 
-    public int PtyIdleTimeoutSeconds { get; set; } = 600;
+    public int PtyIdleTimeoutSeconds { get; set; } = 1500;
 
-    public int PtyMaxLifetimeSeconds { get; set; } = 3600;
+    public int PtyMaxLifetimeSeconds { get; set; } = 14400;
 }

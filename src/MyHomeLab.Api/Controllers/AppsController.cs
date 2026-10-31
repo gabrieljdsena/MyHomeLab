@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
 using MyHomeLab.Application.Services;
@@ -8,9 +10,14 @@ namespace MyHomeLab.Api.Controllers;
 
 [ApiController]
 [Route("api/apps")]
-public sealed class AppsController(AppService appService, IHealthChecker healthChecker, IDockerService dockerService) : ControllerBase
+public sealed class AppsController(
+    AppService appService,
+    IHealthChecker healthChecker,
+    IDockerService dockerService,
+    IDeployService deployService) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthSetup.ReadOnlyServicePolicy)]
     [ProducesResponseType(typeof(AppDetailDto[]), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetApps(
         [FromQuery] string? search,
@@ -114,6 +121,65 @@ public sealed class AppsController(AppService appService, IHealthChecker healthC
         }
 
         return Ok(container);
+    }
+
+    [HttpPost("{id:guid}/deploy")]
+    [Authorize(Policy = AuthSetup.HomelabActionsPolicy)]
+    [ProducesResponseType(typeof(DeployStatusDto), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeployApp(Guid id, CancellationToken cancellationToken)
+    {
+        var app = await appService.GetByIdAsync(AppId.From(id), cancellationToken);
+        if (string.IsNullOrWhiteSpace(app.ServiceName) || string.IsNullOrWhiteSpace(app.BuildScriptPath))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Not Configured",
+                Detail = "App has no deploy configuration (service name and build script path).",
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        var status = await deployService.StartDeployAsync(id, app.ServiceName, app.BuildScriptPath, cancellationToken);
+        return Accepted(status);
+    }
+
+    [HttpGet("{id:guid}/deploy")]
+    [Authorize(Policy = AuthSetup.ReadOnlyServicePolicy)]
+    [ProducesResponseType(typeof(DeployStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDeployStatus(Guid id, CancellationToken cancellationToken)
+    {
+        var status = await deployService.GetDeployStatusAsync(id, cancellationToken);
+        if (status is null)
+        {
+            return NotFound(new ProblemDetails
+            {
+                Title = "Not Found",
+                Detail = "No deploy has been started for this app.",
+                Status = StatusCodes.Status404NotFound,
+            });
+        }
+
+        return Ok(status);
+    }
+
+    [HttpPost("{id:guid}/container/restart")]
+    [Authorize(Policy = AuthSetup.HomelabActionsPolicy)]
+    [ProducesResponseType(typeof(DockerActionResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RestartAppContainer(Guid id, CancellationToken cancellationToken)
+    {
+        var app = await appService.GetByIdAsync(AppId.From(id), cancellationToken);
+        if (string.IsNullOrWhiteSpace(app.DockerContainer))
+        {
+            return NotFound(new ProblemDetails { Title = "Not Found", Detail = "App has no docker container assigned.", Status = StatusCodes.Status404NotFound });
+        }
+
+        var result = await dockerService.ExecuteAsync(app.DockerContainer, "restart", cancellationToken);
+        return Ok(result);
     }
 
     [HttpPost("{id:guid}/docker/{dockerAction}")]

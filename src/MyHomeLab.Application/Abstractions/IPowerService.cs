@@ -4,5 +4,5 @@ namespace MyHomeLab.Application.Abstractions;
 
 public interface IPowerService
 {
-    Task<PowerResponse> ExecuteAsync(string action, CancellationToken cancellationToken);
+    Task<PowerResponse> ExecuteAsync(string action, int? delaySeconds, CancellationToken cancellationToken);
 }

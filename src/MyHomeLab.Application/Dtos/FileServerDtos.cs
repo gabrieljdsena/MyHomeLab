@@ -26,3 +26,22 @@ public record CreateDirectoryRequest(
 public record RenameRequest(
     string From,
     string To);
+
+public record InitUploadRequest(
+    string? Directory,
+    string FileName,
+    long TotalSizeBytes,
+    int TotalChunks,
+    bool Overwrite);
+
+public record UploadSessionDto(
+    string UploadId,
+    string Directory,
+    string FileName,
+    long TotalSizeBytes,
+    int TotalChunks,
+    int ChunkSizeBytes,
+    IReadOnlyList<int> ReceivedChunks);
+
+public record CompleteUploadRequest(
+    string UploadId);

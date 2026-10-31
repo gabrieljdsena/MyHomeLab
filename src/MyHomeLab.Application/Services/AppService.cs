@@ -48,7 +48,9 @@ public sealed class AppService(
             request.DockerContainer,
             request.HealthCheckEnabled,
             request.HealthCheckIntervalMs,
-            request.SortOrder);
+            request.SortOrder,
+            request.ServiceName,
+            request.BuildScriptPath);
 
         await repository.AddAsync(app, cancellationToken);
         return await GetByIdAsync(app.Id, cancellationToken);
@@ -72,7 +74,9 @@ public sealed class AppService(
             request.DockerContainer,
             request.HealthCheckEnabled,
             request.HealthCheckIntervalMs,
-            request.SortOrder);
+            request.SortOrder,
+            request.ServiceName,
+            request.BuildScriptPath);
 
         await repository.UpdateAsync(app, cancellationToken);
         return app.ToDetail();
@@ -100,7 +104,9 @@ public sealed class AppService(
             request.DockerContainer ?? app.DockerContainer,
             request.HealthCheckEnabled ?? app.HealthCheckEnabled,
             request.HealthCheckIntervalMs ?? app.HealthCheckIntervalMs,
-            request.SortOrder ?? app.SortOrder);
+            request.SortOrder ?? app.SortOrder,
+            request.ServiceName ?? app.ServiceName,
+            request.BuildScriptPath ?? app.BuildScriptPath);
 
         if (request.IsEnabled == true)
         {

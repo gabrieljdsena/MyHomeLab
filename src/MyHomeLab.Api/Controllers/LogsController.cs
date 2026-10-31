@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MyHomeLab.Api.Auth;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
 using MyHomeLab.Application.Services;
@@ -10,6 +12,7 @@ namespace MyHomeLab.Api.Controllers;
 public sealed class LogsController(LogService logService) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthSetup.ReadOnlyServicePolicy)]
     [ProducesResponseType(typeof(PagedLogDto), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetLogs(
         [FromQuery] string? search,

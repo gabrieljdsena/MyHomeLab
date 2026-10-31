@@ -1,4 +1,5 @@
 import { usePostgresMetrics } from '../features/system/useSystem'
+import { SqlWorkbench } from '../features/system/SqlWorkbench'
 import { formatBytes, formatUptime } from '../lib/format'
 import { Icon, Spinner } from '../components/Icon'
 import { Bar, Ring } from '../components/Metric'
@@ -156,6 +157,8 @@ export function Postgres() {
           {data.deadlocks > 0 && <Flag label="Deadlocks" value={String(data.deadlocks)} />}
         </div>
       )}
+
+      <SqlWorkbench />
 
       <p className="mt-4 text-[11px] leading-relaxed text-muted/60">
         Sampled every 5s from <code className="text-muted/80">/api/system/postgres</code>. The{' '}

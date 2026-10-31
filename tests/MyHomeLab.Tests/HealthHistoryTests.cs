@@ -50,7 +50,7 @@ public class HealthHistoryTests
         var history = new FakeHealthHistoryRepository();
         var service = new AppService(repo, history);
         var app = await service.CreateAsync(new MyHomeLab.Application.Dtos.CreateAppRequest(
-            "Jellyfin", "http://localhost:8096", "Media", "movie", "media", 8096, ["media"], null, true, 30_000, 0));
+            "Jellyfin", "http://localhost:8096", "Media", "movie", "media", 8096, ["media"], null, null, null, true, 30_000, 0));
 
         var result = await service.ProbeAsync(AppId.From(app.Id), new StubUpChecker());
 
@@ -67,7 +67,7 @@ public class HealthHistoryTests
         var history = new FakeHealthHistoryRepository();
         var service = new AppService(repo, history);
         var app = await service.CreateAsync(new MyHomeLab.Application.Dtos.CreateAppRequest(
-            "App", "http://localhost", "desc", "web", "other", null, [], null, true, 30_000, 0));
+            "App", "http://localhost", "desc", "web", "other", null, [], null, null, null, true, 30_000, 0));
         var id = AppId.From(app.Id);
 
         await history.AddAsync(new AppHealthSample(1, id, AppHealthStatus.Up, 10, DateTime.UtcNow.AddMinutes(-2)));
@@ -91,7 +91,7 @@ public class HealthHistoryTests
         var history = new FakeHealthHistoryRepository();
         var service = new AppService(repo, history);
         var app = await service.CreateAsync(new MyHomeLab.Application.Dtos.CreateAppRequest(
-            "App2", "http://localhost:8097", "desc", "web", "other", null, [], null, true, 30_000, 1));
+            "App2", "http://localhost:8097", "desc", "web", "other", null, [], null, null, null, true, 30_000, 1));
 
         var dto = await service.GetHealthHistoryAsync(AppId.From(app.Id), 24, 200);
         Assert.Empty(dto.Points);
@@ -105,7 +105,7 @@ public class HealthHistoryTests
         var failingHistory = new FailingHistoryRepository();
         var service = new AppService(repo, failingHistory);
         var app = await service.CreateAsync(new MyHomeLab.Application.Dtos.CreateAppRequest(
-            "App3", "http://localhost:8098", "desc", "web", "other", null, [], null, true, 30_000, 2));
+            "App3", "http://localhost:8098", "desc", "web", "other", null, [], null, null, null, true, 30_000, 2));
 
         var result = await service.ProbeAsync(AppId.From(app.Id), new StubUpChecker());
         Assert.Equal("up", result.Status);

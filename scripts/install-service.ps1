@@ -76,5 +76,15 @@ else {
     Write-Host "[skip] service '$ServiceName' already registered"
 }
 
+# Runs for both fresh installs and existing services: a hub without a signing
+# secret refuses to start, so never leave it unset.
+$jwtSecret = [Environment]::GetEnvironmentVariable('Auth__JwtSecret', 'Machine')
+if (-not $jwtSecret) {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    [Environment]::SetEnvironmentVariable('Auth__JwtSecret', [Convert]::ToBase64String($bytes), 'Machine')
+    Write-Host "[ok] generated JWT signing secret (machine env Auth__JwtSecret)"
+}
+
 Start-Service $ServiceName -ErrorAction SilentlyContinue
 Write-Host "[ok] service '$ServiceName' started"

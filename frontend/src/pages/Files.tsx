@@ -6,7 +6,8 @@ import { Icon, Spinner } from '../components/Icon'
 const VideoPlayer = lazy(() =>
   import('../components/VideoPlayer').then((module) => ({ default: module.VideoPlayer })),
 )
-import { downloadUrl, uploadFiles, type FileEntry } from '../api/files'
+import { downloadUrl, uploadFileChunked, uploadFiles, type FileEntry } from '../api/files'
+import { SINGLE_UPLOAD_MAX_BYTES } from '../lib/chunks'
 import {
   useDeletePath,
   useFileList,
@@ -117,19 +118,45 @@ export function Files() {
   const runUpload = async (files: FileList | File[], overwrite: boolean, targetDir: string = cwd) => {
     if (files.length === 0) return
     const destLabel = targetDir === '' ? 'the shared root' : `'${targetDir}'`
+    const list = Array.from(files)
+    const totalBytes = list.reduce((sum, file) => sum + file.size, 0)
+    const reportTotal = (loaded: number) => {
+      if (totalBytes > 0) setUploadPercent(Math.min(99, Math.round((loaded / totalBytes) * 100)))
+      else setUploadPercent(null)
+    }
     setUploading(true)
     setUploadPercent(0)
-    setUploadLabel(`Uploading ${files.length} file${files.length === 1 ? '' : 's'} to ${destLabel}…`)
+    setUploadLabel(`Uploading ${list.length} file${list.length === 1 ? '' : 's'} to ${destLabel}…`)
     setNotice(null)
     try {
-      await uploadFiles(targetDir, files, {
-        overwrite,
-        onProgress: ({ loaded, total }) => {
-          if (total) setUploadPercent(Math.round((loaded / total) * 100))
-          else setUploadPercent(null)
-        },
-      })
-      setNotice({ kind: 'info', text: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} to ${destLabel}.` })
+      const small = list.filter((file) => file.size <= SINGLE_UPLOAD_MAX_BYTES)
+      const large = list.filter((file) => file.size > SINGLE_UPLOAD_MAX_BYTES)
+      const saved: FileEntry[] = []
+      let doneBytes = 0
+      if (small.length > 0) {
+        const batch = await uploadFiles(targetDir, small, {
+          overwrite,
+          onProgress: ({ loaded }) => {
+            reportTotal(doneBytes + loaded)
+          },
+        })
+        saved.push(...batch)
+        doneBytes += small.reduce((sum, file) => sum + file.size, 0)
+        reportTotal(doneBytes)
+      }
+      for (const file of large) {
+        const entry = await uploadFileChunked(targetDir, file, {
+          overwrite,
+          onProgress: ({ loaded }) => {
+            reportTotal(doneBytes + loaded)
+          },
+        })
+        saved.push(entry)
+        doneBytes += file.size
+        reportTotal(doneBytes)
+      }
+      setUploadPercent(100)
+      setNotice({ kind: 'info', text: `Uploaded ${saved.length} file${saved.length === 1 ? '' : 's'} to ${destLabel}.` })
       void queryClient.invalidateQueries({ queryKey: queryKeys.files })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Upload failed.'
@@ -143,7 +170,7 @@ export function Files() {
           return
         }
       }
-      setNotice({ kind: 'error', text: message })
+      setNotice({ kind: 'error', text: status ? `Upload failed (HTTP ${status}): ${message}` : message })
     } finally {
       setUploading(false)
       setUploadPercent(null)
@@ -438,7 +465,7 @@ export function Files() {
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
             <div
-              className="h-full rounded-full bg-upload transition-all"
+              className="h-full rounded-full bg-accent transition-all"
               style={{ width: `${uploadPercent ?? 0}%` }}
             />
           </div>

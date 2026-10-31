@@ -19,6 +19,8 @@ public class AppServiceTests
             8096,
             ["media", "video"],
             DockerContainer: null,
+            ServiceName: null,
+            BuildScriptPath: null,
             HealthCheckEnabled: true,
             HealthCheckIntervalMs: 30_000,
             SortOrder: 10);
@@ -33,6 +35,21 @@ public class AppServiceTests
         Assert.NotEqual(Guid.Empty, created.Id);
         Assert.Equal("Jellyfin", created.Name);
         Assert.Equal("unknown", created.HealthStatus);
+    }
+
+    [Fact]
+    public async Task CreateAsync_Persists_Deploy_Target()
+    {
+        var service = new AppService(new FakeAppRepository());
+
+        var created = await service.CreateAsync(CreateRequest() with
+        {
+            ServiceName = "Hathor",
+            BuildScriptPath = @"C:\scripts\build.ps1",
+        });
+
+        Assert.Equal("Hathor", created.ServiceName);
+        Assert.Equal(@"C:\scripts\build.ps1", created.BuildScriptPath);
     }
 
     [Fact]
@@ -71,6 +88,8 @@ public class AppServiceTests
                 Port: null,
                 Tags: null,
                 DockerContainer: null,
+                ServiceName: null,
+                BuildScriptPath: null,
                 HealthCheckEnabled: null,
                 IsEnabled: false,
                 HealthCheckIntervalMs: null,

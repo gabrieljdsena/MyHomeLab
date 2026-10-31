@@ -19,6 +19,8 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
         port                     AS "Port",
         tags                     AS "Tags",
         docker_container         AS "DockerContainer",
+        service_name             AS "ServiceName",
+        build_script_path        AS "BuildScriptPath",
         health_check_enabled     AS "HealthCheckEnabled",
         health_check_interval_ms AS "HealthCheckIntervalMs",
         health_status            AS "HealthStatus",
@@ -87,11 +89,13 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
         const string sql = """
             INSERT INTO apps (
                 id, name, description, url, icon, category, port, tags, docker_container,
+                service_name, build_script_path,
                 health_check_enabled, health_check_interval_ms, health_status,
                 last_health_check, last_latency_ms, is_enabled, sort_order,
                 created_at, updated_at)
             VALUES (
                 @Id, @Name, @Description, @Url, @Icon, @Category, @Port, @Tags, @DockerContainer,
+                @ServiceName, @BuildScriptPath,
                 @HealthCheckEnabled, @HealthCheckIntervalMs, @HealthStatus,
                 @LastHealthCheckUtc, @LastLatencyMs, @IsEnabled, @SortOrder,
                 @CreatedAtUtc, @UpdatedAtUtc);
@@ -120,6 +124,8 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
                 port                     = @Port,
                 tags                     = @Tags,
                 docker_container         = @DockerContainer,
+                service_name             = @ServiceName,
+                build_script_path        = @BuildScriptPath,
                 health_check_enabled     = @HealthCheckEnabled,
                 health_check_interval_ms = @HealthCheckIntervalMs,
                 is_enabled               = @IsEnabled,
@@ -195,6 +201,8 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
             Port = app.Port,
             Tags = app.Tags,
             DockerContainer = app.DockerContainer,
+            ServiceName = app.ServiceName,
+            BuildScriptPath = app.BuildScriptPath,
             HealthCheckEnabled = app.HealthCheckEnabled,
             HealthCheckIntervalMs = app.HealthCheckIntervalMs,
             HealthStatus = app.HealthStatus.ToString().ToLowerInvariant(),
@@ -217,6 +225,8 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
             row.Port,
             row.Tags,
             row.DockerContainer,
+            row.ServiceName,
+            row.BuildScriptPath,
             row.HealthCheckEnabled,
             row.HealthCheckIntervalMs,
             Enum.Parse<AppHealthStatus>(row.HealthStatus, ignoreCase: true),
@@ -238,6 +248,8 @@ internal sealed class DapperAppRepository(NpgsqlDataSource dataSource) : IAppRep
         public int? Port { get; set; }
         public string[] Tags { get; set; } = [];
         public string? DockerContainer { get; set; }
+        public string? ServiceName { get; set; }
+        public string? BuildScriptPath { get; set; }
         public bool HealthCheckEnabled { get; set; }
         public int HealthCheckIntervalMs { get; set; }
         public string HealthStatus { get; set; } = string.Empty;

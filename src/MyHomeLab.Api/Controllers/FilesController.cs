@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using MyHomeLab.Application.Abstractions;
 using MyHomeLab.Application.Dtos;
+using MyHomeLab.Application.Errors;
 
 namespace MyHomeLab.Api.Controllers;
 
@@ -37,6 +38,7 @@ public sealed class FilesController(IFileServerService files) : ControllerBase
     [HttpPost("upload")]
     [DisableRequestSizeLimit]
     [RequestSizeLimit(long.MaxValue)]
+    [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
     [ProducesResponseType(typeof(FileEntryDto[]), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -51,7 +53,32 @@ public sealed class FilesController(IFileServerService files) : ControllerBase
             return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "No files were uploaded.", Status = StatusCodes.Status400BadRequest });
         }
 
-        var saved = new List<FileEntryDto>(Request.Form.Files.Count);
+        var pending = Request.Form.Files
+            .Where(formFile => !string.IsNullOrWhiteSpace(formFile.FileName))
+            .Select(formFile => Path.GetFileName(formFile.FileName))
+            .ToArray();
+        if (pending.Length == 0)
+        {
+            return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "No files were uploaded.", Status = StatusCodes.Status400BadRequest });
+        }
+
+        // Validate the whole batch before writing anything, so a conflict or a full
+        // disk can never leave half the files saved while the UI reports failure.
+        if (!overwrite)
+        {
+            var conflicts = pending.Where(name => files.Exists(path, name)).ToArray();
+            if (conflicts.Length > 0)
+            {
+                throw new SharedFileConflictException(
+                    conflicts.Length == 1
+                        ? $"File '{conflicts[0]}' already exists."
+                        : $"{conflicts.Length} files already exist: {string.Join(", ", conflicts)}.");
+            }
+        }
+
+        files.EnsureQuotaAvailable(Request.Form.Files.Sum(formFile => formFile.Length));
+
+        var saved = new List<FileEntryDto>(pending.Length);
         foreach (var formFile in Request.Form.Files)
         {
             if (string.IsNullOrWhiteSpace(formFile.FileName))
@@ -64,6 +91,69 @@ public sealed class FilesController(IFileServerService files) : ControllerBase
         }
 
         return Ok(saved);
+    }
+
+    [HttpPost("uploads/init")]
+    [ProducesResponseType(typeof(UploadSessionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public IActionResult InitUpload([FromBody] InitUploadRequest request)
+    {
+        return Ok(files.InitUploadSession(
+            request.Directory,
+            request.FileName,
+            request.TotalSizeBytes,
+            request.TotalChunks,
+            request.Overwrite));
+    }
+
+    [HttpGet("uploads/{uploadId}")]
+    [ProducesResponseType(typeof(UploadSessionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public IActionResult GetUpload(string uploadId)
+    {
+        return Ok(files.GetUploadSession(uploadId));
+    }
+
+    [HttpPut("uploads/{uploadId}/chunks/{chunkIndex:int}")]
+    [DisableRequestSizeLimit]
+    [RequestSizeLimit(32 * 1024 * 1024)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PutChunk(
+        string uploadId,
+        int chunkIndex,
+        CancellationToken cancellationToken)
+    {
+        if (Request.ContentLength is null)
+        {
+            return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Chunk requires a Content-Length.", Status = StatusCodes.Status400BadRequest });
+        }
+
+        await files.AppendUploadChunkAsync(uploadId, chunkIndex, Request.Body, Request.ContentLength.Value, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("uploads/{uploadId}/complete")]
+    [ProducesResponseType(typeof(FileEntryDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CompleteUpload(string uploadId, CancellationToken cancellationToken)
+    {
+        return Ok(await files.CompleteUploadSessionAsync(uploadId, cancellationToken));
+    }
+
+    [HttpDelete("uploads/{uploadId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public IActionResult AbortUpload(string uploadId)
+    {
+        files.AbortUploadSession(uploadId);
+        return NoContent();
     }
 
     [HttpPost("mkdir")]

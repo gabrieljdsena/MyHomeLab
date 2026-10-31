@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
-import { getPostgresMetrics, getSystemMetrics } from '../../api/system'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { getPostgresMetrics, getPostgresSchema, getSystemMetrics, runSql } from '../../api/system'
 import { queryKeys } from '../../lib/queryKeys'
 
 const REFETCH_MS = 5_000
@@ -17,5 +17,19 @@ export function usePostgresMetrics() {
     queryKey: queryKeys.systemPostgres,
     queryFn: getPostgresMetrics,
     refetchInterval: REFETCH_MS,
+  })
+}
+
+export function usePostgresSchema() {
+  return useQuery({
+    queryKey: queryKeys.systemPostgresSchema,
+    queryFn: getPostgresSchema,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useRunSql() {
+  return useMutation({
+    mutationFn: ({ sql, database }: { sql: string; database: string | null }) => runSql(sql, database),
   })
 }

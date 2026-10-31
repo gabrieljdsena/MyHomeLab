@@ -104,22 +104,31 @@ plugs in behind interfaces.
     is resolved by the probe and shown on the card — backslashes, spaces, underscores and relative segments
     must be rejected. `LastIpAddress`/`LastMacAddress` are only ever written by `SetReachability`, which
     ignores malformed values and leaves the previous hint in place.
-- **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` ports,
-  `AppService` implementing CRUD (+ `DockerContainer`) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
+- **Application** — orchestration + DTOs. `IAppRepository` + `IHealthHistoryRepository` + `IDockerService` + `IDeployService` ports,
+  `AppService` implementing CRUD (+ `DockerContainer`, deploy target) + `ProbeAsync` (records history) + `GetHealthHistoryAsync`,
   and `IHealthChecker`/`IDockerService` abstractions. No Postgres/Dapper references here.
   Machine side: `IMachineRepository` + `IMachineReachabilityProbe` ports and
   `MachineService` (CRUD, `RecordReachabilityAsync`).
   Logs side (read-only): `ILogRepository` port and `LogService` (`GetPagedAsync` with
   search/application/page/pageSize, `GetApplicationsAsync`, `GetByIdAsync`) over the
   `logs` table — no writes from the hub.
+  Auth side: `IAuthRepository` + `IAuthTokenService` + `IPasswordHasher` ports and
+  `AuthService` (setup/login/validate-and-slide/logout/password-change; shared rules in
+  `AuthPolicy`; domain errors `InvalidCredentialsException` → 401 /
+  `AuthConflictException` → 409 / `ValidationException` → 400).
 - **Infrastructure** — `DapperAppRepository` + `DapperHealthHistoryRepository` + `DapperMachineRepository`
-  (raw SQL via Npgsql/Dapper),
+  (raw SQL via Npgsql/Dapper), `DapperAuthRepository` (advisory-locked first-run setup),
+  `Pbkdf2PasswordHasher` (600k iterations, constant-time compare), `JwtTokenService` (HS256,
+  `Auth:JwtSecret` fail-fast ≥ 32 bytes),
   `SqlMigrationRunner` (executes `Migrations/Scripts/*.sql` in order, tracked in
   `schema_migrations`), `HttpHealthChecker` (async HTTP GET probe), `DockerService` (wraps `docker` CLI via `Process` — `ps -a --format "{{json .}}"`, `start/stop/restart`),
+  `DeployService` (spawns a detached PowerShell wrapper that runs an app's `build.ps1`, then restarts the mapped Windows service, reporting progress through status files — `Deploy:TimeoutSeconds`, `Deploy:StateDirectory`),
   `WindowsLanReachabilityProbe` (ICMP `Ping` + `ArpMacResolver` for the hardware address via
   `iphlpapi!SendARP`).
-- **Api** — controllers (`AppsController`) return typed DTOs, map `404`/`400`/`409`,
+- **Api** — controllers (`AppsController`, `AuthController`, …) return typed DTOs, map `404`/`400`/`409`,
   wire DI, serve `wwwroot`, top-level exception middleware returning RFC 7807 problems.
+  `AddMyHomeLabAuth`/`UseMyHomeLabAuth` (`Api/Auth/`) owns JwtBearer-from-cookie setup,
+  the global fallback policy, the login/setup rate limiter and the origin check.
 
 ## 6. Database (Postgres, database `myhomelab`)
 
@@ -165,6 +174,14 @@ CREATE INDEX ix_app_health_checks_checked_at ON app_health_checks (checked_at DE
 ALTER TABLE apps ADD COLUMN docker_container TEXT;
 CREATE INDEX ix_apps_docker_container ON apps (docker_container) WHERE docker_container IS NOT NULL;
 
+-- Deploy targets (0012_add_deploy_config.sql): build script + Windows service per app.
+-- 0013_seed_deploy_config.sql points Hathor at its build.ps1/service and registers
+-- the hub itself (MyHomeLab) with the same deploy target.
+-- 0014_add_aiwaifu_deploy_target.sql points the AI Waifu Assistant tile at its
+-- NSSM service ('AIWaifuAssistant') and scripts\build.ps1.
+ALTER TABLE apps ADD COLUMN service_name TEXT;
+ALTER TABLE apps ADD COLUMN build_script_path TEXT;
+
 -- LAN Windows PCs (0008_create_lan_machines.sql)
 CREATE TABLE lan_machines (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -201,6 +218,28 @@ CREATE TABLE logs (
 );
 CREATE INDEX ix_logs_application ON logs (application);
 CREATE INDEX ix_logs_id_desc ON logs (id DESC);
+
+-- Auth (0015_create_auth.sql): one local account + DB-backed sessions.
+CREATE TABLE users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,   -- pbkdf2-sha256$iterations$saltB64$keyB64
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE auth_sessions (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- the JWT 'sid' claim
+    user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,   -- slides forward on activity
+    revoked_at   TIMESTAMPTZ,
+    user_agent   TEXT,
+    created_ip   TEXT
+);
+CREATE INDEX ix_auth_sessions_user ON auth_sessions (user_id);
+CREATE INDEX ix_auth_sessions_expires ON auth_sessions (expires_at);
 ```
 
 `last_ip` / `last_mac` are written **only** by the reachability probe, never by the API.
@@ -209,6 +248,18 @@ than being blanked, and a malformed value is dropped instead of failing the prob
 
 Migrations live in `src/MyHomeLab.Infrastructure/Migrations/` as `NNNN_description.sql`
 and apply automatically on startup.
+
+**Remote access is intentionally closed.** `pg_hba.conf` allows `127.0.0.1/32`
+and `::1/128` only — the `192.168.15.0/24` line is commented out as `# [myhomelab]`
+(timestamped `pg_hba.conf.bak-*` next to the original) — and the
+`PostgreSQL Remote Access` inbound firewall rule is disabled. At check time the
+LAN path was verified rejected (`FATAL: no pg_hba.conf entry`). The hub connects
+over localhost; for DB work use the hub's own terminal (`/terminal`) instead of
+re-opening the LAN path. To temporarily re-open (e.g. pgAdmin from another PC):
+uncomment the `# [myhomelab]` lines or restore the backup, run
+`Enable-NetFirewallRule -DisplayName 'PostgreSQL Remote Access'`, then
+`SELECT pg_reload_conf();`. (`listen_addresses` stays `*`; the port merely
+listens — nothing can authenticate or connect past the firewall + hba walls.)
 
 ## 7. API Contract (versioned under `/api`)
 
@@ -225,13 +276,17 @@ POST   /api/apps/{id}/check     -> 200 {status, latencyMs}   (manual probe now)
 GET    /api/apps/{id}/history?hours=24&limit=200 -> HealthHistory {points, uptime}
 GET    /api/apps/{id}/docker    -> DockerContainer (200) or 404 if no mapping / not found
 POST   /api/apps/{id}/docker/{start|stop|restart} -> DockerActionResult
+POST   /api/apps/{id}/deploy    -> 202 DeployStatus (starts a detached build+restart; 400 if no deploy target)
+GET    /api/apps/{id}/deploy    -> DeployStatus (poll target; 404 if no deploy has run for the app)
 GET    /api/docker/containers   -> DockerContainer[]
 GET    /api/docker/containers/{name} -> DockerContainer
 POST   /api/docker/containers/{name}/{start|stop|restart} -> DockerActionResult
 GET    /api/system              -> SystemMetrics   (live CPU/RAM/disks of this host)
 GET    /api/system/network      -> NetworkSample[] (rolling ~5 min throughput history)
 GET    /api/system/postgres     -> PostgresMetrics (live vitals of the hub's own database)
-POST   /api/system/power        -> PowerResponse   (shutdown/reboot host, uses shutdown /s|/r /t 0 or shutdown -h|-r now)
+GET    /api/system/postgres/schema -> PostgresCatalog   (databases + their tables/views/matviews)
+POST   /api/system/postgres/query -> SqlWorkbenchResult (one DML statement; body {sql, database?} targets any database; 400 on DDL/multi-statement/Postgres errors)
+POST   /api/system/power        -> PowerResponse   (shutdown/reboot host; optional delaySeconds 0-300; uses shutdown /s|/r /t N or shutdown -h|-r now)
 GET    /api/healthz             -> 200 {status:"ok", version}
 GET    /api/categories          -> string[]      (distinct categories, for the form)
 GET    /api/terminal/config     -> TerminalConfig (shell allowlist, timeout, default cwd, pty flags)
@@ -243,12 +298,50 @@ GET    /api/logs/{id}           -> LogEntry
 GET    /api/files?path=         -> FileListResponse {path, entries, quotaUsedBytes, quotaMaxBytes}
 GET    /api/files/config        -> FileServerConfig {enabled, rootName, quotaMaxBytes}
 GET    /api/files/download?path= -> file bytes (attachment, range supported for media seek)
-POST   /api/files/upload?path=&overwrite= -> FileEntry[] (multipart form-data, streams to disk)
+POST   /api/files/upload?path=&overwrite= -> FileEntry[] (multipart form-data, streams to disk; batch is pre-validated so conflicts/quota fail before anything is written)
+POST   /api/files/uploads/init     -> UploadSession {uploadId, totalChunks, chunkSizeBytes, receivedChunks[]} (body {directory, fileName, totalSizeBytes, totalChunks, overwrite}; validates name/quota/conflict up front so large uploads fail fast at 0% instead of 96%)
+GET    /api/files/uploads/{uploadId} -> UploadSession (resume bitmap: which chunk indexes are stored)
+PUT    /api/files/uploads/{uploadId}/chunks/{index} -> 204 (raw octet-stream body, Content-Length required; 8 MB chunks with per-chunk retry)
+POST   /api/files/uploads/{uploadId}/complete -> FileEntry (verifies all chunks, concatenates atomically, enforces quota)
+DELETE /api/files/uploads/{uploadId} -> 204 (aborts; stale sessions swept after FileServer:UploadSessionTtlHours)
 POST   /api/files/mkdir         -> FileEntry (body {parentPath, name})
 POST   /api/files/rename        -> FileEntry (body {from, to} — rename or move)
 DELETE /api/files?path=&recursive= -> 204 (recursive=true deletes non-empty folders)
-GET    /swagger                 -> Swagger UI
+GET    /api/auth/status         -> {needsSetup}   (anonymous; drives first-run redirect)
+POST   /api/auth/setup          -> 200 AuthUser   (first run only, atomic; 409 if an account exists)
+POST   /api/auth/login          -> 200 AuthUser   (sets __Host-mhl.session cookie; 401 bad creds; 429 rate limited)
+POST   /api/auth/logout         -> 204            (revokes current session, clears cookie)
+POST   /api/auth/logout-all     -> 204            (revokes every session; 401 without a live one)
+GET    /api/auth/me             -> AuthUser       (current user, 401 when no session)
+POST   /api/auth/password       -> 204            (change own password; 400 wrong current, revokes all other sessions)
+GET    /api/api-keys            -> ApiKey[]       (session only; token hashes never returned)
+POST   /api/api-keys            -> {apiKey, token} (session only; full token shown once, never expires)
+PATCH  /api/api-keys/{id}       -> ApiKey          (session only; body {canWrite}; grant/remove action permission)
+DELETE /api/api-keys/{id}       -> 204            (session only; revokes the key permanently)
+GET    /swagger                 -> Swagger UI (the spec at /swagger/v1/swagger.json requires auth)
 ```
+
+`AuthUser`:
+```json
+{ "id": "uuid", "username": "gabriel", "createdAt": "2026-10-17T10:00:00Z" }
+```
+
+Every route except `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, the
+SPA fallback and static files requires authentication (global fallback policy).
+The cookie is `__Host-mhl.session` (HttpOnly, Secure, SameSite=Strict, Path=/);
+the JWT carries `sub`/`sid`/`iat`/`nbf`/`exp` and is only valid while its
+`auth_sessions` row exists. Non-GET requests with a cross-site `Origin`/`Referer`
+are rejected with 403; the interactive terminal WebSocket also checks the origin
+during the handshake.
+
+Integration keys are managed at `/api-keys` (UI) / `/api/api-keys` (session-only
+API). Create a key, copy the one-time token, and send it as `X-Api-Key`. Tokens
+are stored as SHA-256 hashes in `api_keys` and never expire. Read scope covers
+`GET /api/apps`, `GET /api/system` and `GET /api/logs`. Keys with
+`can_write=true` can additionally use `POST /api/apps/{id}/deploy`,
+`POST /api/apps/{id}/container/restart`, and `POST /api/system/power`; all other
+routes remain session-only. Revoke a key from the page to invalidate it
+immediately.
 
 `LogEntry`:
 ```json
@@ -285,6 +378,8 @@ reflect the filtered set, so the UI can page through it.
   "port": 8888,
   "tags": ["search"],
   "dockerContainer": "searxng",
+  "serviceName": null,
+  "buildScriptPath": null,
   "healthCheckEnabled": true,
   "healthCheckIntervalMs": 30000,
   "healthStatus": "up",
@@ -319,6 +414,20 @@ reflect the filtered set, so the UI can page through it.
 }
 ```
 Exec path: `DockerService` validates `^[a-zA-Z0-9][a-zA-Z0-9_.\-]*$`, runs `docker ps -a --format "{{json .}}"` (list) or `docker {start|stop|restart} <name>` via `Process` with `Docker:TimeoutSeconds` (default 30s), re-inspects after. Errors map to RFC7807 400/404. Disabled via `Docker:Enabled=false`. Requires `docker` CLI on PATH of the service user (LocalSystem needs `C:\Program Files\Docker\Docker\resources\bin` on PATH — installer does this).
+
+`DeployStatus` (from `POST /api/apps/{id}/deploy` and `GET /api/apps/{id}/deploy`):
+```json
+{
+  "appId": "94c5ab2c-…",
+  "state": "building",
+  "message": "Running C:\\Users\\gabriel\\myhomelab\\scripts\\build.ps1...",
+  "exitCode": null,
+  "outputTail": "…tail of the build output…",
+  "startedAtUtc": "2026-10-16T09:31:02.145Z",
+  "updatedAtUtc": "2026-10-16T09:31:02.145Z"
+}
+```
+Deploy path: the app must have both `serviceName` and `buildScriptPath` (validated by the `App` aggregate: service name `^[a-zA-Z0-9][a-zA-Z0-9 _.\-]*$`, script path absolute `.ps1`), otherwise `400`. `POST` writes a generated `deploy.ps1` wrapper + `status.json` under `Deploy:StateDirectory` (`C:\ProgramData\MyHomeLab\deploys\{appId}`, temp fallback) and launches the wrapper **detached** (`UseShellExecute`, hidden window) so it survives the API restarting itself; it returns `202` immediately. The wrapper runs `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <build.ps1>` from the script's directory (output redirected into `deploy.log`), then on exit 0 restarts the service (`Restart-Service` if running, `Start-Service` otherwise); on failure it starts the service if the script left it stopped. States: `queued → building → restarting → done|failed`; `GET` returns the latest status (404 if none) with the log tail (`Deploy:OutputTailChars`). A deploy still active after `Deploy:TimeoutSeconds` (default 1800s) + 300s is considered stale and a new one may start. Runs as the service user (LocalSystem when installed via `scripts/install-service.ps1`, so it can restart services and rebuild in-place).
 
 ### Machines (`/api/machines`)
 
@@ -502,6 +611,7 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   one-click open (external tab) + status dot + tag chips + health strip. Search box filters by name/tag.
   Each tile (`frontend/src/components/AppCard.tsx:1`) shows a compact `HealthStrip` (`HealthStrip.tsx:1`) — last 30 probes as colored bars (up=green, down=red) with 24h uptime pill — and a toggle (`monitoring` icon) that expands an inline `HealthHistoryPanel` (`HealthHistoryPanel.tsx:1`): hour selector (1h/6h/24h/7d), uptime/avg latency/checks stats, hand-rolled SVG latency line + down markers, and a dense availability bar. Strip and panel poll `GET /api/apps/{id}/history` every 30s via `useHealthHistory` (`features/apps/useHealthHistory.ts:1`) with centralized `queryKeys.appHistory`.
   When `dockerContainer` is set, the tile also renders `DockerControls` (`components/DockerControls.tsx:1`) — container name + `state` pill (running=green pulse) + `Start`/`Stop`/`Restart` (confirm for stop) powered by `GET /api/apps/{id}/docker` + `POST /api/apps/{id}/docker/{action}` via `features/docker/useDocker.ts:1` (`queryKeys.appDocker`/`dockerContainers`, 15s poll).
+  When `serviceName` + `buildScriptPath` are set, the tile renders `DeployControls` (`components/DeployControls.tsx:1`): a `Redeploy` button (`refresh` icon; confirm dialog showing the script + service) calling `POST /api/apps/{id}/deploy`, then live polling of `GET /api/apps/{id}/deploy` every 3s via `useDeployStatus` (`features/apps/useApps.ts:1`, `queryKeys.appDeploy`) — state (queued/building/restarting) with a spinner, the final result (done/failed) with an expandable tail of the build output, and a retry note while the service is offline mid-restart.
   A sticky **System panel** sits beside the grid (≥xl): live CPU ring, memory and
   per-disk bars (orange accent), hostname, OS, uptime — polled every 5s via `/api/system`.
   The `Ring`/`Bar` primitives it uses were extracted to `components/Metric.tsx:1` so the
@@ -511,9 +621,19 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   with smooth curves, hover crosshair + tooltip, and live bytes/sec readout. Polled every
   5s via `/api/system/network`. (Upload color token `--color-upload` lives in `index.css`.)
   Content is centered at `max-w-7xl`.
+- **Remote access (Tailscale)**: tile links are host-aware — `AppCard` resolves the stored
+  URL host against `window.location.hostname` via `lib/resolveAppUrl.ts:1` (scheme, port and
+  path preserved), so the same tiles work whether the dashboard is loaded from the LAN IP or
+  from the Tailscale hostname (`dell-server1` / `dell-server1.tail1f7af5.ts.net`). Reaching
+  the app ports over Tailscale also needs an inbound firewall rule scoped to the `Tailscale`
+  interface (rule `MyHomeLab apps (Tailscale)`: TCP 1234 LLM, 3012 Vaultwarden, 5000 AI Waifu,
+  5001 Kavita, 8096 Jellyfin, 8443 RomM, 8888 SearXNG); `Profile=Any` rules already cover
+  443/8080 (hub), 80 (Pi-hole) and 5051 (Hathor). Docker-published ports and the Python/LLM/
+  Jellyfin apps only had `Public`-profile rules, hence the gap. https tiles (RomM, Vaultwarden)
+  show a certificate warning on the Tailscale hostname until their certs gain that SAN.
 - **Manage**: CRUD table with inline create, edit drawer, delete confirm, sort order.
   Category dropdown (from `/api/categories`), Material Symbol picker, tags input.
-  New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker.
+  New `Docker container` column shows mapped name + live state pill from `GET /api/docker/containers` (`useDockerContainers`). Actions per row now include docker `Start`/`Stop`/`Restart` (disabled per state, busy spinner) alongside `Probe now`. Create/Edit drawer (`AppForm.tsx:1`) adds a `Docker container` field with a `<datalist>` of live containers (suggestions) — empty means non-docker — plus the deploy target fields (`Deploy: service name`, `Deploy: build script`, both optional).
 - **Machines**: LAN Windows PC registry (`/machines`). Card grid (`components/MachineCard.tsx:1`) —
   icon tile, name, description, `lan` hostname chip (plus the resolved IPv4 when it differs and the
   ARP MAC when known), reachability dot (reuses `StatusDot` by mapping
@@ -564,6 +684,29 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   deadlocks >0. Polls `GET /api/system/postgres` every 5s via `usePostgresMetrics`
   (`queryKeys.systemPostgres`). Lives on its own page rather than in the dashboard System panel
   because the metric set is too tall for the ~380px sidebar column.
+  Below the tiles, the **SQL workbench** (`features/system/SqlWorkbench.tsx:1`) — terminal-style
+  DML console (Enter runs, Shift+Enter newline, ↑/↓ walks a 10-entry run history persisted in
+  `localStorage` via `workbenchHistory.ts:1`) posting one statement to
+  `POST /api/system/postgres/query` through `useRunSql`. Results render as a sticky-header grid
+  (NULL muted-italic, truncation noted) or an affected-rows line; Postgres/validation errors show
+  as a red panel. Only SELECT/INSERT/UPDATE/DELETE/WITH pass `SqlStatementValidator`
+  (Application) — one statement per run, `SELECT ... INTO` rejected, semicolons inside strings,
+  comments and dollar quotes can't smuggle a second statement; rows/timeout caps come from
+  `PostgresWorkbench` config (500 / 10s).
+  A **database tree bar** (`features/system/DatabaseTree.tsx:1`, left column on `lg`, filter box,
+  manual refresh, `usePostgresSchema` with a 5-min `staleTime`) lists every connectable database
+  with its tables/views/materialized views (`NpgsqlPostgresCatalogReader` opens one short-lived
+  connection per database; an unreadable database degrades to an empty list). Clicking a relation
+  loads `SELECT * FROM <schema>.<table> LIMIT 50;` into the editor (identifiers quoted only when
+  needed, `schemaHelpers.ts:1`) and switches the header's **Run against** dropdown — the query
+  body's optional `database` field makes `NpgsqlSqlExecutor` open a one-off connection to that
+  database (Postgres has no cross-database queries). `SqlWorkbenchService` validates the name to
+  `^[A-Za-z_][A-Za-z0-9_$-]*$` (≤63 chars) before it reaches a connection string. Right-clicking a
+  tree node opens a context menu (`components/ContextMenu.tsx:1`, portaled to `body` so the tree's
+  scroll clipping can't cut it off; menu models in `features/system/treeMenu.ts:1`): a database
+  offers *Set as run target*, *List tables* and *Table sizes*; a relation offers *SELECT *
+  (LIMIT 50)*, *SELECT COUNT(*)* and *Copy qualified name*. Query items only insert into the
+  editor — they never auto-run.
 - **Logs** (`/logs`): read-only viewer over the `logs` table (`pages/Logs.tsx:1`). Search
   box (debounced, matches application or text) + application filter dropdown (distinct
   values from `GET /api/logs/applications` via `useLogApplications`,
@@ -587,11 +730,42 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
 - **Terminal**: full-width interactive tab (`/terminal`). Dark terminal chrome (window
   dots, xterm.js + FitAddon + WebLinksAddon, lazy-loaded chunk), shell selector (powershell/pwsh/cmd),
   real persistent shell over `WS /api/terminal/ws` — streaming ANSI output, tab completion, `Ctrl+C`,
-  resize, fullscreen TUIs (`opencode`, editors). One WS connection = one shell process, killed on
-  disconnect; idle sessions die after `PtyIdleTimeoutSeconds`, max `PtyMaxSessions` concurrent.
+  resize, fullscreen TUIs (`opencode`, editors). **Sessions live on the host, not in the WS
+  connection**: the API keeps a registry (`TerminalPtyService`, in-memory `ConcurrentDictionary`)
+  and the WS attaches/detaches by `?session=<id>` instead of owning the shell. Disconnecting
+  (page change, refresh, browser close) only detaches; the shell dies on explicit kill
+  (`DELETE /api/terminal/sessions/{id}`), idle (`PtyIdleTimeoutSeconds`, 25 min without I/O),
+  host maximum lifetime (`PtyMaxLifetimeSeconds`, 4 h), shell exit, or API shutdown. Output is
+  buffered in a 512 KB ring buffer inside `NodePtySession` and replayed on reattach (new
+  `attach` frame carries the session id; output fans out to every attachment, so multiple
+  devices can attach the same session and share the screen). `GET /api/terminal/sessions`
+  lists live sessions (shell, cwd, clients, started) and powers the sessions menu in the tab
+  strip, which attaches another device's session as a tab or kills it. Multi-tab: one
+  `TerminalPty` + WS per tab, inactive tabs stay mounted so background sessions keep running,
+  `+` is capped at `PtyMaxSessions` (`n/max` hint), closing a tab kills its shell; the tab list
+  is persisted per browser tab in `sessionStorage` (`myhomelab.terminal-tabs`) and restored on
+  mount, dropping tabs whose session no longer exists (`features/terminal/tabs.ts` holds the
+  pure tab-state helpers). The workspace is mounted once by `Layout` and kept alive (hidden)
+  across routes — `features/terminal/TerminalWorkspace.tsx` — so page changes never drop a
+  WebSocket. Tabs sit in a strip attached to the top of the terminal shell (tab dots are the
+  only connection indicator; the per-shell chrome row carries `idle` info, shell select,
+  reconnect/clear/kill). Fullscreen mode is a `fixed`
+  overlay plus the native Fullscreen API; `fullscreenchange` keeps the overlay in sync so browser
+  Esc exits cleanly. Appearance popover (`features/terminal/TerminalAppearancePopover.tsx`):
+  wallpaper presets or a custom image (pasted URL / picked from Files via `/api/files/download`),
+  opacity slider, persisted per browser in `localStorage` (`myhomelab.terminal-appearance`, pure
+  parsing in `features/terminal/appearance.ts`). The wallpaper covers only the terminal pane
+  (strip and chrome stay solid; the strip is stacked above the pane so the popover overlays it).
+  Transparency model: xterm is always constructed
+  with `allowTransparency: true` (the option cannot be toggled after `open()`, per xterm docs);
+  with a wallpaper the theme background becomes fully transparent and a single tint layer behind
+  the terminal carries the opacity (xterm otherwise paints its theme background twice —
+  viewport + screen — which would stack alpha), plus `index.css` overrides
+  `.xterm-transparent .xterm-viewport { background-color: transparent }` to defeat the stylesheet's
+  opaque default.
   Backend (`TerminalPtyEndpoint` + `TerminalPtyService`) spawns a Node sidecar (`Terminal/NodePty/pty-bridge`,
   pinned `node-pty`, `npm ci` on build, copied to output) per session; protocol is JSON frames
-  (`input`/`resize` client→server, `output`/`exit`/`error` server→client). `POST /api/terminal/exec`
+  (`input`/`resize` client→server, `attached`/`output`/`exit`/`error` server→client). `POST /api/terminal/exec`
   remains as fallback (used automatically when PTY is disabled or WS is unreachable);
   `GET /api/terminal/config` carries allowlist/timeout/pty flags. Kestrel endpoints are pinned to
   `Http1` — browsers negotiate HTTP/2 via ALPN and Kestrel answers WS handshakes on h2 with GOAWAY,
@@ -601,18 +775,37 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   progress (409 → overwrite confirm), download (range-enabled so video seeks), mkdir, rename/move,
   delete (recursive confirm for non-empty folders), inline image preview and video via
   Plyr (`components/VideoPlayer.tsx:1`, lazy-loaded so it only downloads on first video
-  preview; Plyr ships no types, covered by a minimal `lib/plyr.d.ts`). Backend
-  (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
-  streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
-  `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +
-  `features/files/useFiles.ts` (`queryKeys.files*`) + `pages/Files.tsx:1`.
-- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
+   preview; Plyr ships no types, covered by a minimal `lib/plyr.d.ts`). Backend
+   (`FilesController` + `FileSystemFileService`) jails every path with `Path.GetFullPath` prefix checks,
+   streams uploads/downloads without buffering, enforces quota before/during writes (partial removed).
+   `desktop.ini`/`Thumbs.db` hidden server-side. Frontend: `api/files.ts` (XHR for progress) +
+   `features/files/useFiles.ts` (`queryKeys.files*`) + `pages/Files.tsx:1`.
+   Files larger than 8 MB (`lib/chunks.ts` `SINGLE_UPLOAD_MAX_BYTES`) upload through the chunked
+   session protocol above (`api/files.ts` `uploadFileChunked`: 8 MB `PUT` chunks, sequential with
+   3x exponential-backoff retry per chunk, byte-weighted progress across mixed small/large batches,
+   best-effort abort on failure); smaller files keep the single-POST path. Session temp lives in
+   `<root>/.upload-tmp/{uploadId}/`, hidden from listings and excluded from quota until completed.
+- **Header power control**: `Layout` nav shows `Dashboard | Manage | Machines | Files | Logs | Postgres | API keys | Terminal | Power` (`frontend/src/components/Layout.tsx:35`) — red `power_settings_new` dropdown beside Terminal with `Shut down` and `Restart` (`restart_alt` accent). Calls `POST /api/system/power {action:"shutdown"|"reboot"}` (`src/MyHomeLab.Api/Controllers/SystemController.cs:35`, `src/MyHomeLab.Infrastructure/System/PowerService.cs:1`, `src/MyHomeLab.Application/Abstractions/IPowerService.cs:1`) via TanStack Query mutation with `ConfirmDialog` (shutdown `/s /t 0` vs `/r /t 0` on Windows, `-h now` vs `-r now` on Linux). WoL is handled separately via `scripts/enable-wol.ps1` (runs `powercfg /h off`, `Set-NetAdapterPowerManagement`, `HiberbootEnabled=0` — BIOS still needs `ErP Disabled`, use `shutdown /r /fw /t 0` to enter). This dropdown controls the **hub host**; the Machines tab only observes the **remote PCs**.
 - **Settings**: placeholder page for later (theme, refresh interval, header text).
+- **Auth** (`/login`, `/setup`): `AuthGate` wraps `Layout` — it resolves
+  `GET /api/auth/status` + `GET /api/auth/me` first (spinner / retry card while
+  the API is unreachable), redirects to `/setup` on first run and to `/login`
+  (remembering `from`) without a session. `features/auth/` holds `useAuth.ts`
+  (TanStack Query hooks), `AuthShell.tsx`, `LoginPage.tsx`, `SetupPage.tsx`
+  (client-side rules: username `[a-zA-Z0-9._-]{3,32}`, password ≥ 12, confirm
+  match). Any 401 from a query/mutation clears the cached `me` globally
+  (`main.tsx` caches) so the gate bounces to `/login`; login/setup are never
+  retried on 401. `Layout` shows a `Sign out` button next to the power dropdown
+  (mobile: inside the menu) calling `POST /api/auth/logout` + `queryClient.clear()`.
+  `fetch` uses `credentials: 'same-origin'` (`api/client.ts`) so the HttpOnly
+  cookie rides along.
 - Single API base from same origin when served on 443; in dev, Vite proxy
   `/api → http://192.168.15.22:8080`.
 
-**Auth note**: LAN-trusted + self-signed TLS for v1. A simple access token
-(shared secret header) is the planned v1.1 hardening — out of scope now.
+**Auth**: the hub requires a single local account (created on first run via the
+`/setup` page; credentials live in `users` with PBKDF2-SHA256 hashes). Sessions
+are DB-backed and survive redeploys. See §10 for the `Auth` config block and
+`Auth__JwtSecret` env var.
 
 ## 10. Configuration
 
@@ -628,7 +821,18 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
   "ConnectionStrings": {
     "MyHomeLab": "Host=localhost;Port=5432;Database=myhomelab;Username=postgres;Password=..."
   },
+  "Auth": {
+    "Issuer": "myhomelab",
+    "Audience": "myhomelab",
+    "SessionDays": 30,
+    "TouchIntervalMinutes": 5,
+    "ReissueAfterHours": 24
+  },
   "Health": { "TimeoutSeconds": 3, "DefaultIntervalMs": 30000 },
+  "PostgresWorkbench": {
+    "TimeoutSeconds": 10,
+    "MaxRows": 500
+  },
   "Terminal": {
     "Enabled": true,
     "DefaultShell": "powershell",
@@ -637,8 +841,8 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "MaxOutputBytes": 100000,
     "PtyEnabled": true,
     "PtyMaxSessions": 4,
-    "PtyIdleTimeoutSeconds": 600,
-    "PtyMaxLifetimeSeconds": 3600
+    "PtyIdleTimeoutSeconds": 1500,
+    "PtyMaxLifetimeSeconds": 14400
   },
   "Toolchain": {
     "NodeExecutable": null,
@@ -666,12 +870,31 @@ does not touch `updated_at` so a 30s probe never looks like a user edit.
     "Enabled": true,
     "RootPath": "C:\\Shared-Server",
     "QuotaMaxBytes": 26843545600,
-    "HideSystemFiles": true
+    "HideSystemFiles": true,
+    "UploadChunkBytes": 8388608,
+    "UploadTempDirName": ".upload-tmp",
+    "UploadSessionTtlHours": 24
   }
 }
 ```
 Secrets never committed: connection string overridable via
-`ConnectionStrings__MyHomeLab` env var; cert via `ASPNETCORE_Kestrel__Certificates__Default__Path`.
+`ConnectionStrings__MyHomeLab` env var; cert via `ASPNETCORE_Kestrel__Certificates__Default__Path`;
+JWT signing secret via `Auth__JwtSecret` (≥ 32 bytes; startup fails fast when
+missing — `scripts/dev.ps1` writes it to `%LOCALAPPDATA%\MyHomeLab\auth.jwt-secret`,
+`scripts/install-service.ps1` generates it as a machine env var).
+
+### Auth: session model
+
+One user, sliding 30-day sessions. `POST /api/auth/login` verifies the PBKDF2
+hash (600k iterations, constant-time) and inserts an `auth_sessions` row
+(`expires_at = now + SessionDays`), then issues an HS256 JWT carrying `sub`, `sid`,
+`iat`/`nbf`/`exp` as a `__Host-mhl.session` cookie. Every authenticated request
+revalidates the `sid` against the database; after `TouchIntervalMinutes` of
+inactivity the row's `last_seen_at`/`expires_at` slide forward again, and a token
+older than `ReissueAfterHours` is transparently reissued. Logout revokes the row
+(`logout-all` revokes every row). Expired rows are purged on each successful
+login. Login and setup are rate limited (5 attempts / 15 min per IP → 429) and
+cross-site non-GET requests are rejected (403) on top of SameSite=Strict.
 
 ### Machines: operational requirements
 
@@ -716,16 +939,20 @@ host and outbound ping fails without it.
 scripts/create-db.ps1                    # create DB + grants
 
 # Dev
-scripts/dev.ps1                          # watch API on 8080 + Vite dev on 5173 (proxy /api)
+scripts/dev.ps1                          # watch API on 8080 + Vite dev on 5173 (proxy /api); generates Auth__JwtSecret on first run
 
 # Production build
-scripts/build.ps1                        # npm build -> frontend/dist -> API wwwroot, dotnet publish
+scripts/build.ps1                        # npm build -> frontend/dist -> API wwwroot, dotnet publish to staging, stop/swap/start MyHomeLab around the swap (-NoRestart to skip)
 
 # Run / install as a service (survives reboot)
 scripts/install-service.ps1              # sc create / Windows equivalent (run as LocalSystem)
 scripts/install-pawnio.ps1               # install PawnIO driver (required for CPU temperatures)
 scripts/install-tools.ps1                # ensure machine-wide toolchain (see below; also runs inside install-service)
 # then: plc <app> start (or `Start-Service MyHomeLab`)
+
+# Verify auth enforcement on a running instance (every /api route 401 without a
+# session, carve-outs still open; add -Username/-Password for the login flow)
+scripts/verify-auth.ps1 -BaseUrl https://<host>
 ```
 
 Output single deployable: `MyHomeLab.Api` serves everything on :443/:8080.
@@ -748,6 +975,9 @@ lives in the user profile, so the service needs provider keys via machine env
 ## 12. Acceptance Criteria
 
 - Browsing `https://<host>` shows the dark dashboard with seeded app tiles.
+- First visit redirects to `/setup`; afterwards `/login`. Sessions survive an API
+  restart/redeploy (30-day sliding), logout revokes immediately, and `/api/apps`
+  without a session returns 401 problem+json.
 - Health dots go up/down as services are stopped/started.
 - CRUD round-trips persist to Postgres; delete is immediate; duplicate name → 409.
 - `http://<host>:8080/api/apps` returns JSON (API reachable on its own port).

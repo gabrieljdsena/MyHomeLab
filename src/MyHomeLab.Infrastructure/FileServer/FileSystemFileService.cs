@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MyHomeLab.Application.Abstractions;
@@ -220,6 +221,31 @@ public sealed class FileSystemFileService(IOptions<FileServerOptions> options, I
         }
     }
 
+    public bool Exists(string? relativeDir, string fileName)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        FileServerPaths.ValidateSegment(fileName);
+        var dirFull = FileServerPaths.Resolve(root, relativeDir);
+        if (!Directory.Exists(dirFull))
+        {
+            throw new SharedFileNotFoundException($"Directory '{relativeDir}' was not found.");
+        }
+
+        var destFull = FileServerPaths.Resolve(root, CombineRelative(relativeDir, fileName.Trim()));
+        return File.Exists(destFull) || Directory.Exists(destFull);
+    }
+
+    public void EnsureQuotaAvailable(long requiredBytes)
+    {
+        EnsureEnabled();
+        var available = config.QuotaMaxBytes - GetUsedBytes();
+        if (requiredBytes > available)
+        {
+            throw new DomainException($"Storage quota exceeded (25 GB). Free {FormatBytes(requiredBytes - available)} to upload these files.");
+        }
+    }
+
     public FileEntryDto CreateDirectory(string? parentPath, string name)
     {
         EnsureEnabled();
@@ -347,12 +373,18 @@ public sealed class FileSystemFileService(IOptions<FileServerOptions> options, I
             return 0;
         }
 
+        var sessionsDir = SessionRoot(root);
         long total = 0;
         try
         {
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
                 if (file.Contains(".upload-", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (file.StartsWith(sessionsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -375,6 +407,230 @@ public sealed class FileSystemFileService(IOptions<FileServerOptions> options, I
         return total;
     }
 
+    public UploadSessionDto InitUploadSession(
+        string? relativeDir,
+        string fileName,
+        long totalSizeBytes,
+        int totalChunks,
+        bool overwrite)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        FileServerPaths.ValidateSegment(fileName);
+        var dirFull = FileServerPaths.Resolve(root, relativeDir);
+        if (!Directory.Exists(dirFull))
+        {
+            throw new SharedFileNotFoundException($"Directory '{relativeDir}' was not found.");
+        }
+
+        var chunkBytes = ChunkSize();
+        if (totalSizeBytes < 1)
+        {
+            throw new DomainException("Upload size must be at least 1 byte.");
+        }
+
+        var expectedChunks = (int)((totalSizeBytes + chunkBytes - 1) / chunkBytes);
+        if (totalChunks != expectedChunks)
+        {
+            throw new DomainException($"Chunk count {totalChunks} does not match size {totalSizeBytes} with {chunkBytes}-byte chunks (expected {expectedChunks}).");
+        }
+
+        var destFull = FileServerPaths.Resolve(root, CombineRelative(relativeDir, fileName.Trim()));
+        if (Directory.Exists(destFull))
+        {
+            throw new DomainException("A directory with the same name already exists.");
+        }
+
+        if (File.Exists(destFull) && !overwrite)
+        {
+            throw new SharedFileConflictException($"File '{fileName}' already exists.");
+        }
+
+        EnsureQuotaForNewFile(destFull, totalSizeBytes);
+        SweepStaleSessions(root);
+
+        var uploadId = Guid.NewGuid().ToString("N");
+        var sessionDir = SessionDir(root, uploadId);
+        Directory.CreateDirectory(sessionDir);
+        var meta = new UploadSessionMeta(
+            relativeDir is null ? string.Empty : FileServerPaths.ToRelative(root, dirFull),
+            fileName.Trim(),
+            totalSizeBytes,
+            totalChunks,
+            chunkBytes,
+            overwrite,
+            DateTime.UtcNow);
+        File.WriteAllText(MetaPath(sessionDir), JsonSerializer.Serialize(meta));
+
+        logger.LogInformation("Upload session init id={UploadId} dir={Dir} name={Name} bytes={Bytes} chunks={Chunks}", uploadId, relativeDir, fileName, totalSizeBytes, totalChunks);
+        return ToSessionDto(uploadId, meta, []);
+    }
+
+    public UploadSessionDto GetUploadSession(string uploadId)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        var (sessionDir, meta) = LoadSession(root, uploadId);
+        return ToSessionDto(uploadId, meta, ReceivedChunkIndexes(sessionDir, meta.TotalChunks));
+    }
+
+    public async Task AppendUploadChunkAsync(
+        string uploadId,
+        int chunkIndex,
+        Stream content,
+        long chunkLength,
+        CancellationToken cancellationToken)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        var (sessionDir, meta) = LoadSession(root, uploadId);
+
+        if (chunkIndex < 0 || chunkIndex >= meta.TotalChunks)
+        {
+            throw new DomainException($"Chunk index {chunkIndex} is out of range (0..{meta.TotalChunks - 1}).");
+        }
+
+        var expected = ExpectedChunkSize(meta, chunkIndex);
+        if (chunkLength != expected)
+        {
+            throw new DomainException($"Chunk {chunkIndex} is {chunkLength} bytes; expected {expected}.");
+        }
+
+        var slotPath = ChunkPath(sessionDir, chunkIndex);
+        await using (var dest = new FileStream(slotPath, FileMode.Create, FileAccess.Write, FileShare.None, 80 * 1024, useAsync: true))
+        {
+            var buffer = new byte[80 * 1024];
+            long remaining = chunkLength;
+            while (remaining > 0)
+            {
+                var read = await content.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                await dest.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                remaining -= read;
+            }
+
+            if (remaining != 0)
+            {
+                throw new DomainException($"Chunk {chunkIndex} ended early ({chunkLength - remaining} of {chunkLength} bytes).");
+            }
+        }
+
+        if (new FileInfo(slotPath).Length != expected)
+        {
+            throw new DomainException($"Chunk {chunkIndex} was not stored completely.");
+        }
+    }
+
+    public async Task<FileEntryDto> CompleteUploadSessionAsync(string uploadId, CancellationToken cancellationToken)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        var (sessionDir, meta) = LoadSession(root, uploadId);
+
+        var missing = Enumerable.Range(0, meta.TotalChunks)
+            .Where(i => !File.Exists(ChunkPath(sessionDir, i)))
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            throw new DomainException($"Upload is incomplete; missing chunk(s): {string.Join(", ", missing.Take(10))}.");
+        }
+
+        var dirFull = FileServerPaths.Resolve(root, meta.Directory);
+        if (!Directory.Exists(dirFull))
+        {
+            throw new SharedFileNotFoundException($"Directory '{meta.Directory}' was not found.");
+        }
+
+        var destFull = FileServerPaths.Resolve(root, CombineRelative(meta.Directory, meta.FileName));
+        if (Directory.Exists(destFull))
+        {
+            throw new DomainException("A directory with the same name already exists.");
+        }
+
+        if (File.Exists(destFull) && !meta.Overwrite)
+        {
+            throw new SharedFileConflictException($"File '{meta.FileName}' already exists.");
+        }
+
+        EnsureQuotaForNewFile(destFull, meta.TotalSizeBytes);
+
+        var tempFull = destFull + ".upload-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var dest = new FileStream(tempFull, FileMode.CreateNew, FileAccess.Write, FileShare.None, 80 * 1024, useAsync: true))
+            {
+                for (var i = 0; i < meta.TotalChunks; i++)
+                {
+                    await using var slot = new FileStream(ChunkPath(sessionDir, i), FileMode.Open, FileAccess.Read, FileShare.Read, 80 * 1024, useAsync: true);
+                    if (slot.Length != ExpectedChunkSize(meta, i))
+                    {
+                        throw new DomainException($"Chunk {i} is corrupt; re-upload it.");
+                    }
+
+                    await slot.CopyToAsync(dest, cancellationToken);
+                }
+            }
+
+            if (new FileInfo(tempFull).Length != meta.TotalSizeBytes)
+            {
+                throw new DomainException("Assembled file size does not match the declared size.");
+            }
+
+            if (File.Exists(destFull))
+            {
+                File.Delete(destFull);
+            }
+
+            File.Move(tempFull, destFull);
+            Directory.Delete(sessionDir, true);
+
+            var info = new FileInfo(destFull);
+            logger.LogInformation("Upload session complete id={UploadId} name={Name} bytes={Bytes}", uploadId, meta.FileName, info.Length);
+            return new FileEntryDto(
+                info.Name,
+                FileServerPaths.ToRelative(root, destFull),
+                false,
+                info.Length,
+                info.LastWriteTimeUtc,
+                Path.GetExtension(info.Name).TrimStart('.').ToLowerInvariant() is { } ext && ext.Length > 0 ? ext : null);
+        }
+        catch
+        {
+            try
+            {
+                if (File.Exists(tempFull))
+                {
+                    File.Delete(tempFull);
+                }
+            }
+            catch
+            {
+                // best effort cleanup
+            }
+
+            throw;
+        }
+    }
+
+    public void AbortUploadSession(string uploadId)
+    {
+        EnsureEnabled();
+        var root = EnsureRoot();
+        ValidateUploadId(uploadId);
+        var sessionDir = SessionDir(root, uploadId);
+        if (!Directory.Exists(sessionDir))
+        {
+            throw new SharedFileNotFoundException($"Upload '{uploadId}' was not found.");
+        }
+
+        Directory.Delete(sessionDir, true);
+        logger.LogInformation("Upload session aborted id={UploadId}", uploadId);
+    }
+
     private void EnsureEnabled()
     {
         if (!config.Enabled)
@@ -392,8 +648,138 @@ public sealed class FileSystemFileService(IOptions<FileServerOptions> options, I
 
     private bool ShouldHide(string name)
     {
-        return config.HideSystemFiles && SystemFileNames.Contains(name);
+        return config.HideSystemFiles && SystemFileNames.Contains(name)
+            || name.Equals(config.UploadTempDirName, StringComparison.OrdinalIgnoreCase);
     }
+
+    private int ChunkSize()
+    {
+        return config.UploadChunkBytes >= 64 * 1024 ? config.UploadChunkBytes : 8 * 1024 * 1024;
+    }
+
+    private string SessionRoot(string root)
+    {
+        return Path.Combine(root, config.UploadTempDirName);
+    }
+
+    private string SessionDir(string root, string uploadId)
+    {
+        ValidateUploadId(uploadId);
+        return Path.Combine(SessionRoot(root), uploadId);
+    }
+
+    private static string MetaPath(string sessionDir) => Path.Combine(sessionDir, "meta.json");
+
+    private static string ChunkPath(string sessionDir, int index) => Path.Combine(sessionDir, $"chunk-{index:D6}");
+
+    private static void ValidateUploadId(string uploadId)
+    {
+        if (uploadId.Length != 32 || !uploadId.All(c => char.IsAsciiHexDigit(c)))
+        {
+            throw new SharedFileNotFoundException($"Upload '{uploadId}' was not found.");
+        }
+    }
+
+    private (string SessionDir, UploadSessionMeta Meta) LoadSession(string root, string uploadId)
+    {
+        var sessionDir = SessionDir(root, uploadId);
+        var metaPath = MetaPath(sessionDir);
+        if (!File.Exists(metaPath))
+        {
+            throw new SharedFileNotFoundException($"Upload '{uploadId}' was not found.");
+        }
+
+        UploadSessionMeta? meta;
+        try
+        {
+            meta = JsonSerializer.Deserialize<UploadSessionMeta>(File.ReadAllText(metaPath));
+        }
+        catch
+        {
+            meta = null;
+        }
+
+        if (meta is null || meta.TotalChunks < 1 || meta.TotalSizeBytes < 1)
+        {
+            throw new DomainException("Upload session is corrupt; start a new upload.");
+        }
+
+        return (sessionDir, meta);
+    }
+
+    private static IReadOnlyList<int> ReceivedChunkIndexes(string sessionDir, int totalChunks)
+    {
+        var received = new List<int>(totalChunks);
+        for (var i = 0; i < totalChunks; i++)
+        {
+            if (File.Exists(ChunkPath(sessionDir, i)))
+            {
+                received.Add(i);
+            }
+        }
+
+        return received;
+    }
+
+    private static long ExpectedChunkSize(UploadSessionMeta meta, int index)
+    {
+        if (index < meta.TotalChunks - 1)
+        {
+            return meta.ChunkSizeBytes;
+        }
+
+        return meta.TotalSizeBytes - ((long)meta.ChunkSizeBytes * (meta.TotalChunks - 1));
+    }
+
+    private static UploadSessionDto ToSessionDto(string uploadId, UploadSessionMeta meta, IReadOnlyList<int> received)
+    {
+        return new UploadSessionDto(uploadId, meta.Directory, meta.FileName, meta.TotalSizeBytes, meta.TotalChunks, meta.ChunkSizeBytes, received);
+    }
+
+    private void EnsureQuotaForNewFile(string destFull, long newLength)
+    {
+        var usedBefore = GetUsedBytes();
+        var existingLength = File.Exists(destFull) ? new FileInfo(destFull).Length : 0;
+        var available = config.QuotaMaxBytes - (usedBefore - existingLength);
+        if (newLength > available)
+        {
+            throw new DomainException($"Storage quota exceeded (25 GB). Free {FormatBytes(newLength - available)} to upload this file.");
+        }
+    }
+
+    private void SweepStaleSessions(string root)
+    {
+        string sessionsRoot = SessionRoot(root);
+        if (!Directory.Exists(sessionsRoot))
+        {
+            return;
+        }
+
+        var cutoff = DateTime.UtcNow.AddHours(-Math.Max(1, config.UploadSessionTtlHours));
+        foreach (var dir in SafeEnumerateDirectories(sessionsRoot))
+        {
+            try
+            {
+                if (Directory.GetLastWriteTimeUtc(dir) < cutoff)
+                {
+                    Directory.Delete(dir, true);
+                }
+            }
+            catch
+            {
+                // best effort; a live session failing here must not block a new upload
+            }
+        }
+    }
+
+    private sealed record UploadSessionMeta(
+        string Directory,
+        string FileName,
+        long TotalSizeBytes,
+        int TotalChunks,
+        int ChunkSizeBytes,
+        bool Overwrite,
+        DateTime CreatedUtc);
 
     private static string CombineRelative(string? dir, string name)
     {
